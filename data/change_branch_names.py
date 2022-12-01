@@ -20,6 +20,7 @@ for toyFile, picoFile in convert:
                                             'eta' : tree.jetEta,
                                             'phi' : tree.jetPhi,
                                             'mass': tree.jetMass}, with_name='PtEtaPhiMLorentzVector'),
+                             'weight': tree.weight,
                              'run': np.zeros(len(tree)),
                              'luminosityBlock': np.zeros(len(tree)),
                              'event': np.arange(len(tree))}
