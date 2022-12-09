@@ -1,12 +1,13 @@
 # conda create -n coffea_torch coffea pytorch
 # conda activate coffea_torch
 
-import time
+import time, pickle
 import awkward as ak
 import numpy as np
 from functools import partial
 
-import hist # https://hist.readthedocs.io/en/latest/index.html
+# https://hist.readthedocs.io/en/latest/index.html
+import hist
 
 # https://coffeateam.github.io/coffea
 from coffea.nanoevents import NanoEventsFactory, NanoAODSchema, BaseSchema
@@ -18,15 +19,6 @@ NanoAODSchema.warn_missing_crossrefs = False
 import warnings
 warnings.filterwarnings("ignore")
 
-
-# get the number of non-dict objects in a nested dictionary
-def count_nested_dict(nested_dict, c=0):
-    for key in nested_dict:
-        if isinstance(nested_dict[key], dict):
-            c = count_nested_dict(nested_dict[key], c)
-        else:
-            c += 1
-    return c
 
 
 class analysis(processor.ProcessorABC):
@@ -44,21 +36,30 @@ class analysis(processor.ProcessorABC):
         chunk   = f'{dataset}::{estart:6d}:{estop:6d} >>> '
 
         dataset_axis = hist.axis.StrCategory([], growth=True, name='dataset', label='Dataset')
-        cut_axis = hist.axis.StrCategory([], growth=True, name='cut', label='Cut')
-        region_axis = hist.axis.StrCategory([], growth=True, name='region', label='Region')
-        mass_axis = hist.axis.Regular(300, 0, 1500, name='mass', label=r'$m_{4j}$ [GeV]')
+        cut_axis     = hist.axis.StrCategory([], growth=True, name='cut',     label='Cut')
+        region_axis  = hist.axis.StrCategory([], growth=True, name='region',  label='Region')
 
         output = {'hists': {},
                   'cutflow': hist.Hist(dataset_axis, cut_axis, region_axis, storage='weight', label='Events'),
                   'sumw': ak.sum(event.weight),
                   'nEvent': len(event)}
 
-
+        m4j_axis = hist.axis.Regular(300, 0, 1500, name='mass', label=r'$m_{4j}$ [GeV]')
         output['hists']['m4j'] = hist.Hist(dataset_axis,
                                            cut_axis,
                                            region_axis,
-                                           mass_axis,
+                                           m4j_axis,
                                            storage='weight', label='Events')
+
+        lead_st_m2j_axis = hist.axis.Regular(100, 0, 500, name='lead', label=   r'Lead $S_{T}$ $m_{2j}$ [GeV]')
+        subl_st_m2j_axis = hist.axis.Regular(100, 0, 500, name='subl', label=r'Sublead $S_{T}$ $m_{2j}$ [GeV]')
+        output['hists']['lead_st_m2j_subl_st_m2j'] = hist.Hist(dataset_axis,
+                                                               cut_axis,
+                                                               region_axis,
+                                                               lead_st_m2j_axis,
+                                                               subl_st_m2j_axis,
+                                                               storage='weight', label='Events')
+        
 
         # compute four-vector of sum of jets, for the toy samples there are always four jets
         v4j = ak.sum(event.Jet, axis=1)
@@ -145,23 +146,33 @@ class analysis(processor.ProcessorABC):
         return output
 
     def fill(self, output, event, dataset='', cut='', region=''):
-        output['cutflow'].fill(dataset=dataset, cut=cut, region=[region]*len(event), weight=event.weight)
-        output['hists']['m4j'].fill(dataset=dataset, cut=cut, region=region, mass=event.v4j.mass, weight=event.weight)
+        output['cutflow'].fill(
+            dataset=dataset, cut=cut, region=[region]*len(event),
+            weight=event.weight)
+        output['hists']['m4j'].fill(
+            dataset=dataset, cut=cut, region=region,
+            mass=event.v4j.mass, weight=event.weight)
+        output['hists']['lead_st_m2j_subl_st_m2j'].fill(
+            dataset=dataset, cut=cut, region=region,
+            lead=event.quadJet_selected.lead.mass, subl=event.quadJet_selected.subl.mass, weight=event.weight)
 
     def postprocess(self, accumulator):
         pass
+
 
 
 if __name__ == '__main__':
     datasets  = []
     datasets += ['data/fourTag_picoAOD.root']
     datasets += ['data/threeTag_picoAOD.root']
+    datasets += ['data/HH4b_picoAOD.root']
+    datasets += ['data/fourTag_10x_picoAOD.root']
 
     fileset = {}
     for dataset in datasets:
         fileset[dataset] = {'files': [dataset],
                             'metadata': {}}
-    print(fileset)
+
     tstart = time.time()
     output = processor.run_uproot_job(fileset,
                                       treename='Events',
@@ -173,6 +184,8 @@ if __name__ == '__main__':
                                       )
     elapsed = time.time() - tstart
     nEvent = output['nEvent'] #sum([output['nEvent'][dataset] for dataset in output['nEvent'].keys()])
-    nHists = count_nested_dict(output['hists'])
-    print('nHists',nHists)
     print(f'{nEvent/elapsed:,.0f} events/s ({nEvent:,}/{elapsed:,.2f})')
+
+
+    with open('data/hists.pkl', 'wb') as hfile:
+        pickle.dump(output, hfile)
