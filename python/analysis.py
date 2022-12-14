@@ -1,7 +1,7 @@
 # conda create -n coffea_torch coffea pytorch
 # conda activate coffea_torch
 
-import time, pickle
+import time, pickle, os
 import awkward as ak
 import numpy as np
 from functools import partial
@@ -34,6 +34,11 @@ class analysis(processor.ProcessorABC):
         estart  = event.metadata['entrystart']
         estop   = event.metadata['entrystop']
         chunk   = f'{dataset}::{estart:6d}:{estop:6d} >>> '
+        norm    = event.metadata.get('normalize', None)
+        if norm:
+            with open(norm, 'rb') as nfile:
+                norm = pickle.load(nfile)['norm']
+                event['weight'] = norm * event.weight
 
         dataset_axis = hist.axis.StrCategory([], growth=True, name='dataset', label='Dataset')
         cut_axis     = hist.axis.StrCategory([], growth=True, name='cut',     label='Cut')
@@ -62,7 +67,7 @@ class analysis(processor.ProcessorABC):
         
 
         # compute four-vector of sum of jets, for the toy samples there are always four jets
-        v4j = ak.sum(event.Jet, axis=1)
+        v4j = event.Jet.sum(axis=1)
         event['v4j'] = v4j
 
         output['cutflow'].fill(dataset=dataset, cut='all', region=['inclusive']*len(event), weight=event.weight) # bug in boost_histogram, waiting for fix, https://github.com/scikit-hep/boost-histogram/issues/452
@@ -173,6 +178,11 @@ if __name__ == '__main__':
         fileset[dataset] = {'files': [dataset],
                             'metadata': {}}
 
+    outfile = 'data/hists.pkl'
+    if os.path.exists('data/normalize.pkl'):
+        outfile = 'data/hists_normalized.pkl'
+        fileset['data/threeTag_picoAOD.root']['metadata']['normalize'] = 'data/normalize.pkl'
+
     tstart = time.time()
     output = processor.run_uproot_job(fileset,
                                       treename='Events',
@@ -187,5 +197,6 @@ if __name__ == '__main__':
     print(f'{nEvent/elapsed:,.0f} events/s ({nEvent:,}/{elapsed:,.2f})')
 
 
-    with open('data/hists.pkl', 'wb') as hfile:
+    with open(outfile, 'wb') as hfile:
+        print('Save Histograms to',outfile)
         pickle.dump(output, hfile)
