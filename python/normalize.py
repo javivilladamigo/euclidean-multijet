@@ -9,7 +9,7 @@ cutflow = hdict['cutflow']
 w4b = cutflow['data/fourTag_picoAOD.root', 'preselection', 'SB']
 w3b = cutflow['data/threeTag_picoAOD.root', 'preselection', 'SB']
 norm = w4b.value/w3b.value
-print(f'{w4b.value:,.6}/{w3b.value:,.7} = {norm}')
+print(f'{w4b.value:,.7}/{w3b.value:,.7} = {norm}')
 
 output = {'w4b': w4b,
           'w3b': w3b,

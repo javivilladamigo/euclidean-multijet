@@ -64,6 +64,14 @@ class analysis(processor.ProcessorABC):
                                                                lead_st_m2j_axis,
                                                                subl_st_m2j_axis,
                                                                storage='weight', label='Events')
+        lead_st_dr_axis = hist.axis.Regular(60, 0, 6, name='lead', label=   r'Lead $S_T$ $\Delta R(j,j)$')
+        subl_st_dr_axis = hist.axis.Regular(60, 0, 6, name='subl', label=r'Sublead $S_T$ $\Delta R(j,j)$')
+        output['hists']['lead_st_dr_subl_st_dr'] = hist.Hist(dataset_axis,
+                                                             cut_axis,
+                                                             region_axis,
+                                                             lead_st_dr_axis,
+                                                             subl_st_dr_axis,
+                                                             storage='weight', label='Events')
         
 
         # compute four-vector of sum of jets, for the toy samples there are always four jets
@@ -141,9 +149,10 @@ class analysis(processor.ProcessorABC):
         event['SB'] = event.quadJet_selected.SB
         event['SR'] = event.quadJet_selected.SR
         
+        self.fill(output, event,                  dataset=dataset, cut='preselection', region='inclusive')
         self.fill(output, event[event.diJetMass], dataset=dataset, cut='preselection', region='diJetMass')
-        self.fill(output, event[event.SB], dataset=dataset, cut='preselection', region='SB')
-        self.fill(output, event[event.SR], dataset=dataset, cut='preselection', region='SR')
+        self.fill(output, event[event.SB],        dataset=dataset, cut='preselection', region='SB')
+        self.fill(output, event[event.SR],        dataset=dataset, cut='preselection', region='SR')
                 
         # Done
         elapsed = time.time() - tstart
@@ -160,6 +169,9 @@ class analysis(processor.ProcessorABC):
         output['hists']['lead_st_m2j_subl_st_m2j'].fill(
             dataset=dataset, cut=cut, region=region,
             lead=event.quadJet_selected.lead.mass, subl=event.quadJet_selected.subl.mass, weight=event.weight)
+        output['hists']['lead_st_dr_subl_st_dr'].fill(
+            dataset=dataset, cut=cut, region=region,
+            lead=event.quadJet_selected.lead.dr, subl=event.quadJet_selected.subl.dr, weight=event.weight)
 
     def postprocess(self, accumulator):
         pass
@@ -179,9 +191,11 @@ if __name__ == '__main__':
                             'metadata': {}}
 
     outfile = 'data/hists.pkl'
-    if os.path.exists('data/normalize.pkl'):
+    normfile = 'data/normalize.pkl'
+    if os.path.exists(normfile):
+        print(f'Normalize threeTag with {normfile}')
         outfile = 'data/hists_normalized.pkl'
-        fileset['data/threeTag_picoAOD.root']['metadata']['normalize'] = 'data/normalize.pkl'
+        fileset['data/threeTag_picoAOD.root']['metadata']['normalize'] = normfile
 
     tstart = time.time()
     output = processor.run_uproot_job(fileset,
