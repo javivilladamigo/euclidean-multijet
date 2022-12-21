@@ -153,6 +153,8 @@ class analysis(processor.ProcessorABC):
         self.fill(output, event[event.diJetMass], dataset=dataset, cut='preselection', region='diJetMass')
         self.fill(output, event[event.SB],        dataset=dataset, cut='preselection', region='SB')
         self.fill(output, event[event.SR],        dataset=dataset, cut='preselection', region='SR')
+
+        util.save(event[event.diJetMass], dataset.replace('.root',f'_{estart:07d}_{estop:07d}.coffea'))
                 
         # Done
         elapsed = time.time() - tstart
