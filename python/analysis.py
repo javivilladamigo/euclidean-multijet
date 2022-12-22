@@ -84,10 +84,12 @@ class analysis(processor.ProcessorABC):
         # Jet selection
         event['Jet', 'selected'] = (event.Jet.pt>=40) & (np.abs(event.Jet.eta)<=2.4)
         event['nJet_selected'] = ak.sum(event.Jet.selected, axis=1)
-        event = event[event.nJet_selected>=4]
+        event['preselection'] = (event.nJet_selected>=4)
+        #event = event[event.nJet_selected>=4]
 
-        output['cutflow'].fill(dataset=dataset, cut='preselection', region=['inclusive']*len(event), weight=event.weight)
-        output['hists']['m4j'].fill(dataset=dataset, cut='preselection', region='inclusive', mass=event.v4j.mass, weight=event.weight)
+        selev = event[event.preselection]
+        output['cutflow'].fill(dataset=dataset, cut='preselection', region=['inclusive']*len(selev), weight=selev.weight)
+        output['hists']['m4j'].fill(dataset=dataset, cut='preselection', region='inclusive', mass=selev.v4j.mass, weight=selev.weight)
 
         #
         # Build diJets, indexed by diJet[event,pairing,0/1]
@@ -148,13 +150,17 @@ class analysis(processor.ProcessorABC):
         event['diJetMass'] = event.quadJet_selected.diJetMass
         event['SB'] = event.quadJet_selected.SB
         event['SR'] = event.quadJet_selected.SR
-        
-        self.fill(output, event,                  dataset=dataset, cut='preselection', region='inclusive')
-        self.fill(output, event[event.diJetMass], dataset=dataset, cut='preselection', region='diJetMass')
-        self.fill(output, event[event.SB],        dataset=dataset, cut='preselection', region='SB')
-        self.fill(output, event[event.SR],        dataset=dataset, cut='preselection', region='SR')
 
-        util.save(event[event.diJetMass], dataset.replace('.root',f'_{estart:07d}_{estop:07d}.coffea'))
+        mask = event.preselection
+        self.fill(output, event[mask], dataset=dataset, cut='preselection', region='inclusive')
+        mask = event.preselection & event.diJetMass
+        self.fill(output, event[mask], dataset=dataset, cut='preselection', region='diJetMass')
+        mask = event.preselection & event.SB
+        self.fill(output, event[mask], dataset=dataset, cut='preselection', region='SB')
+        mask = event.preselection & event.SR
+        self.fill(output, event[mask], dataset=dataset, cut='preselection', region='SR')
+
+        util.save(event, dataset.replace('.root',f'_{estart:07d}_{estop:07d}.coffea'))
                 
         # Done
         elapsed = time.time() - tstart

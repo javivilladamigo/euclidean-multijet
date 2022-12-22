@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+torch.manual_seed(0)#make training results repeatable 
+
 
 def vector_print(vector, end='\n'):
     vectorString = ", ".join([f'{element:7.2f}' for element in vector])
@@ -59,14 +61,11 @@ class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has w
         print()
         
     @torch.no_grad()
-    def set_mean_std(self, x, mask=None):
+    def set_mean_std(self, x):
         batch_size = x.shape[0]
         pixels = x.shape[2]
         pixel_groups = pixels//self.stride
         x = x.detach().transpose(1,2).contiguous().view(batch_size*pixels, 1, self.features)
-        if mask is not None:
-            mask = mask.detach().view(batch_size*pixels)
-            x = x[mask==0,:,:]
         # this won't work for any layers with stride!=1
         x = x.view(-1, 1, self.stride, self.features)            
         m64 = x.mean(dim=0, keepdim=True, dtype=torch.float64)#.to(self.device)
@@ -79,12 +78,12 @@ class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has w
     def set_ghost_batches(self, n_ghost_batches):
         self.n_ghost_batches = torch.tensor(n_ghost_batches, dtype=torch.long).to(self.device)
 
-    def forward(self, x, mask=None, debug=False):
+    def forward(self, x, debug=False):
         batch_size = x.shape[0]
         pixels = x.shape[2]
         pixel_groups = pixels//self.stride
 
-        if self.training and self.n_ghost_batches!=0 and not self.PCC:
+        if self.training and self.n_ghost_batches!=0:
             self.ghost_batch_size = batch_size // self.n_ghost_batches.abs()
 
             #
@@ -92,20 +91,8 @@ class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has w
             #
             x = x.transpose(1,2).contiguous().view(self.n_ghost_batches.abs(), self.ghost_batch_size*pixel_groups, self.stride, self.features)
             
-            if mask is None:
-                gbm =  x.mean(dim=1, keepdim=True)
-                gbs = (x. var(dim=1, keepdim=True) + self.eps).sqrt()
-
-            else:
-                # Compute masked mean and std for each ghost batch
-                mask = mask.view(self.n_ghost_batches.abs(), self.ghost_batch_size*pixel_groups, self.stride, 1)
-                nUnmasked = (mask==0).sum(dim=1,keepdim=True).float()#.to(self.device)
-                unmasked0 = (nUnmasked==self.zero).float()#.to(self.device)
-                unmasked1 = (nUnmasked==self.one ).float()#.to(self.device)
-                denomMean = nUnmasked + unmasked0 # prevent divide by zero
-                denomVar  = nUnmasked + unmasked0*self.two + unmasked1 - self.one # prevent divide by zero with bessel correction
-                gbm =    x     .masked_fill(mask,0)    .sum(dim=1, keepdim=True) / denomMean
-                gbs = (((x-gbm).masked_fill(mask,0)**2).sum(dim=1, keepdim=True) / denomVar + self.eps).sqrt()
+            gbm =  x.mean(dim=1, keepdim=True)
+            gbs = (x. var(dim=1, keepdim=True) + self.eps).sqrt()
 
             #
             # Keep track of running mean and standard deviation. 
@@ -221,12 +208,6 @@ def addFourVectors(v1, v2, v1PxPyPzE=None, v2PxPyPzE=None): # output added four-
     return v12, v12PxPyPzE
 
 
-def calcDeltaPhi(v1, v2): #expects eta, phi representation
-    dPhi12 = (v1[:,2:3]-v2[:,2:3])%math.tau
-    dPhi21 = (v2[:,2:3]-v1[:,2:3])%math.tau
-    dPhi = torch.min(dPhi12,dPhi21)
-    return dPhi
-
 #
 # Some different non-linear units
 #
@@ -252,19 +233,26 @@ class Input_Embed(nn.Module):
         self.device = device
 
         # embed inputs to dijetResNetBlock in target feature space
-        self.jet_embed     = Ghost_Batch_Norm(4, features_out=self.d, conv=True, name='jet embedder') # phi is relative to dijet
-        self.jet_conv      = Ghost_Batch_Norm(self.d, conv=True, name='jet convolution')
+        self.jet_embed     = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='jet embedder', device=self.device) # phi is relative to dijet, mass is zero in toy data
+        self.jet_conv      = Ghost_Batch_Norm(self.d, conv=True, name='jet convolution', device = self.device)
 
-        self.dijet_embed   = Ghost_Batch_Norm(4, features_out=self.d, conv=True, name='dijet embedder') # phi is relative to quadjet
-        self.dijet_conv    = Ghost_Batch_Norm(self.d, conv=True, name='dijet convolution') 
+        self.dijet_embed   = Ghost_Batch_Norm(4, features_out=self.d, conv=True, name='dijet embedder', device = self.device) # phi is relative to quadjet
+        self.dijet_conv    = Ghost_Batch_Norm(self.d, conv=True, name='dijet convolution', device = self.device) 
 
-        self.quadjet_embed = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='quadjet embedder') # phi is removed
-        self.quadjet_conv  = Ghost_Batch_Norm(self.d, conv=True, name='quadjet convolution')
+        self.quadjet_embed = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='quadjet embedder', device = self.device) # phi is removed
+        self.quadjet_conv  = Ghost_Batch_Norm(self.d, conv=True, name='quadjet convolution', device = self.device)
 
+        self.register_buffer('tau', torch.tensor(math.tau, dtype=torch.float))
+
+    def calcDeltaPhi(self, v1, v2): #expects eta, phi representation
+        dPhi12 = (v1[:,2:3]-v2[:,2:3])%self.tau
+        dPhi21 = (v2[:,2:3]-v1[:,2:3])%self.tau
+        dPhi = torch.min(dPhi12,dPhi21)
+        return dPhi
+        
     def data_prep(self, j):
-        j=j.clone()# prevent overwritting data from dataloader when doing operations directly from RAM rather than copying to VRAM
-        n = j.shape[0]
-        j = j.view(n,4,4)
+        j = j.clone()# prevent overwritting data from dataloader when doing operations directly from RAM rather than copying to VRAM
+        j = j.view(-1,4,4)
 
         # make leading jet eta positive direction so detector absolute eta info is removed
         etaSign = 1-2*(j[:,1,0:1]<0).float() # -1 if eta is negative, +1 if eta is zero or positive
@@ -287,20 +275,20 @@ class Input_Embed(nn.Module):
         j = torch.cat([j, j[:,:,(0,2,1,3)], j[:,:,(0,3,1,2)]],2)
 
         # only keep relative angular information so that learned features are invariant under global phi rotations and eta/phi flips
-        j[:,2:3,(0,2,4,6,8,10)] = calcDeltaPhi(d, j[:,:,(0,2,4,6,8,10)]) # replace jet phi with deltaPhi between dijet and jet
-        j[:,2:3,(1,3,5,7,9,11)] = calcDeltaPhi(d, j[:,:,(1,3,5,7,9,11)])
+        j[:,2:3,(0,2,4,6,8,10)] = self.calcDeltaPhi(d, j[:,:,(0,2,4,6,8,10)]) # replace jet phi with deltaPhi between dijet and jet
+        j[:,2:3,(1,3,5,7,9,11)] = self.calcDeltaPhi(d, j[:,:,(1,3,5,7,9,11)])
 
-        d[:,2:3,(0,2,4)] = calcDeltaPhi(q, d[:,:,(0,2,4)])
-        d[:,2:3,(1,3,4)] = calcDeltaPhi(q, d[:,:,(1,3,5)])
+        d[:,2:3,(0,2,4)] = self.calcDeltaPhi(q, d[:,:,(0,2,4)])
+        d[:,2:3,(1,3,4)] = self.calcDeltaPhi(q, d[:,:,(1,3,5)])
 
         q = torch.cat( (q[:,:2,:],q[:,3:,:]) , 1 ) # remove phi from quadjet features
 
         return j, d, q
 
-    def setMeanStd(self, j):
+    def set_mean_std(self, j):
         j, d, q = self.data_prep(j)
 
-        self    .jet_embed.set_mean_std(j)
+        self    .jet_embed.set_mean_std(j[:,0:3])#mass is always zero in toy data
         self  .dijet_embed.set_mean_std(d)
         self.quadjet_embed.set_mean_std(q)
 
@@ -316,7 +304,7 @@ class Input_Embed(nn.Module):
     def forward(self, j):
         j, d, q = self.data_prep(j)
 
-        j = self    .jet_embed(j)
+        j = self    .jet_embed(j[:,0:3])#mass is always zero in toy data
         d = self  .dijet_embed(d)
         q = self.quadjet_embed(q)
 
@@ -328,19 +316,22 @@ class Input_Embed(nn.Module):
 
 
 class Basic_CNN(nn.Module):
-    def __init__(self, dimension, n_classes=2):
+    def __init__(self, dimension, n_classes=2, device='cpu'):
         super(Basic_CNN, self).__init__()
+        self.device = device
         self.d = dimension
         self.n_classes = n_classes
         self.n_ghost_batches = 64
 
+        self.name = f'Basic_CNN_{self.d}'
+
         self.input_embed = Input_Embed(self.d)
 
-        self.jets_to_dijets     = Ghost_Batch_Norm(self.d, stride=2, conv=True)
-        self.dijets_to_quadjets = Ghost_Batch_Norm(self.d, stride=2, conv=True)
+        self.jets_to_dijets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        self.dijets_to_quadjets = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
 
-        self.select_q = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False)
-        self.out      = Ghost_Batch_Norm(self.d, features_out=self.n_classes, conv=True)
+        self.select_q = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+        self.out      = Ghost_Batch_Norm(self.d, features_out=self.n_classes, conv=True, device = self.device)
 
     def set_mean_std(self, j):
         self.input_embed.set_mean_std(j)
