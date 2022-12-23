@@ -1,4 +1,4 @@
-import pickle, os
+import pickle, os, argparse
 import hist
 import matplotlib
 matplotlib.use('Agg')
@@ -22,11 +22,14 @@ def mkpath(path, debug=False):
 
             
 
-def standard(hdict, var, cut='preselection', region='SB', project='', name='', xlim=[]):
-    h = hdict['hists'][var]
-    h3 = h['data/threeTag_picoAOD.root', cut, region, ...]
-    h4 = h['data/fourTag_picoAOD.root',  cut, region, ...]
-    hh = h['data/HH4b_picoAOD.root',     cut, region, ...]
+def standard(hdict, var, cut='preselection', region='SB', project='', name='', xlim=[], plotsdir='plots'):
+    try:
+        h = hdict['hists'][var]
+        h3 = h['data/threeTag_picoAOD.root', cut, region, ...]
+        h4 = h['data/fourTag_picoAOD.root',  cut, region, ...]
+        hh = h['data/HH4b_picoAOD.root',     cut, region, ...]
+    except KeyError:
+        print(f'Could not find hist(s)', var, cut, region)
 
     if project:
         h3 = h3.project(project)
@@ -51,7 +54,7 @@ def standard(hdict, var, cut='preselection', region='SB', project='', name='', x
     hh.plot1d(ax=axes[0], label=r'SM HH$\rightarrow b\bar{b}b\bar{b}$')
     axes[0].legend()
     
-    outdir = f'plots/{cut}/{region}'
+    outdir = f'{plotsdir}/{cut}/{region}'
     mkpath(outdir)
     if name:
         name = f'{outdir}/{name}.pdf'
@@ -62,10 +65,14 @@ def standard(hdict, var, cut='preselection', region='SB', project='', name='', x
     plt.close()
 
 
-def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=[], ylim=[]):
+def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=[], ylim=[], plotsdir='plots'):
     fig = plt.figure(figsize=(8, 8))
 
-    h = hdict['hists'][var][f'data/{sample}_picoAOD.root', cut, region, ...]
+    try:
+        h = hdict['hists'][var][f'data/{sample}_picoAOD.root', cut, region, ...]
+    except KeyError:
+        print(f'Could not find hist hdict["hists"][{var}]["data/{sample}_picoAOD.root", {cut}, {region}, ...]')
+        return
     
     h.plot2d_full(
         main_cmap="coolwarm",
@@ -84,7 +91,7 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
         axes[0].set_ylim(ylim)
         axes[2].set_ylim(ylim)
 
-    outdir = f'plots/{cut}/{region}'
+    outdir = f'{plotsdir}/{cut}/{region}'
     mkpath(outdir)
     if name:
         name = f'{outdir}/{name}.pdf'
@@ -96,22 +103,28 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
 
 
 if __name__ == '__main__':
-    with open('data/hists_normalized.pkl', 'rb') as hfile:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--hists', default='data/hists_normalized.pkl', help='File containing hists to be plotted')
+    parser.add_argument('--plots', default='plots', help='base directory to save plots')
+    args = parser.parse_args()
+
+    with open(args.hists, 'rb') as hfile:
         hdict = pickle.load(hfile)
 
     for cut in ['preselection']:
         for region in ['inclusive', 'diJetMass', 'SB', 'SR']:
-            standard(hdict, 'm4j', cut=cut, region=region)
+            standard(hdict, 'm4j',    cut=cut, region=region, plotsdir=args.plots)
+            standard(hdict, 'FvT_rw', cut=cut, region=region, plotsdir=args.plots)
 
             xlim = [40,200] if region!='inclusive' else []
             ylim = [40,200] if region!='inclusive' else []
-            standard(hdict, 'lead_st_m2j_subl_st_m2j', project='lead', name='lead_st_m2j', cut=cut, region=region, xlim=xlim)
-            standard(hdict, 'lead_st_m2j_subl_st_m2j', project='subl', name='subl_st_m2j', cut=cut, region=region, xlim=xlim)
+            standard(hdict, 'lead_st_m2j_subl_st_m2j', project='lead', name='lead_st_m2j', cut=cut, region=region, xlim=xlim, plotsdir=args.plots)
+            standard(hdict, 'lead_st_m2j_subl_st_m2j', project='subl', name='subl_st_m2j', cut=cut, region=region, xlim=xlim, plotsdir=args.plots)
 
-            standard(hdict, 'lead_st_dr_subl_st_dr', project='lead', name='lead_st_dr', cut=cut, region=region)
-            standard(hdict, 'lead_st_dr_subl_st_dr', project='subl', name='subl_st_dr', cut=cut, region=region)
+            standard(hdict, 'lead_st_dr_subl_st_dr', project='lead', name='lead_st_dr', cut=cut, region=region, plotsdir=args.plots)
+            standard(hdict, 'lead_st_dr_subl_st_dr', project='subl', name='subl_st_dr', cut=cut, region=region, plotsdir=args.plots)
             
             for sample in ['threeTag', 'fourTag', 'HH4b']:
-                sample2D(hdict, sample, 'lead_st_m2j_subl_st_m2j', cut=cut, region=region, xlim=xlim, ylim=ylim)
+                sample2D(hdict, sample, 'lead_st_m2j_subl_st_m2j', cut=cut, region=region, xlim=xlim, ylim=ylim, plotsdir=args.plots)
 
-                sample2D(hdict, sample, 'lead_st_dr_subl_st_dr', cut=cut, region=region)
+                sample2D(hdict, sample, 'lead_st_dr_subl_st_dr', cut=cut, region=region, plotsdir=args.plots)

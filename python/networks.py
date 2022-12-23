@@ -365,4 +365,30 @@ class Basic_CNN(nn.Module):
         c_logits = c_logits.view(-1, self.n_classes)
 
         return c_logits, q_logits
-        
+
+    
+class K_Fold(nn.Module):
+    def __init__(self, models):
+        super(K_Fold, self).__init__()
+        self.models = models
+        for model in self.models:
+            model.eval()
+
+    @torch.no_grad()
+    def forward(self, j, e):
+
+        c_logits = torch.zeros(j.shape[0], self.models[0].n_classes)
+        q_logits = torch.zeros(j.shape[0], 3)
+
+        for offset, model in enumerate(self.models):
+            mask = (e==offset)
+            c_logits[mask], q_logits[mask] = model(j[mask])
+
+        # shift logits to have mean zero over quadjets/classes. Has no impact on output of softmax, just makes logits easier to interpret
+        c_logits = c_logits - c_logits.mean(dim=-1, keepdim=True)
+        q_logits = q_logits - q_logits.mean(dim=-1, keepdim=True)
+
+        return c_logits, q_logits            
+
+
+    

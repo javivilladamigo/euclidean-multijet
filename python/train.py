@@ -1,5 +1,5 @@
 from glob import glob
-import sys, os, argparse
+import sys, os, argparse, re
 from copy import copy, deepcopy
 from coffea import util
 import awkward as ak
@@ -42,14 +42,16 @@ for i,c in enumerate(classes): c.index=i
 
 # convert coffea objects in to pytorch tensors
 train_valid_modulus = 3
-def coffea_to_tensor(event, device='cpu'):
+def coffea_to_tensor(event, device='cpu', kfold=False):
     j = torch.FloatTensor( event['Jet',('pt','eta','phi','mass')].to_numpy().view(np.float32).reshape(-1,4,4) ) # [event,jet,feature]
     j = j.transpose(1,2).contiguous() # [event,feature,jet]
+    e = torch.LongTensor( np.asarray(event['event'], dtype=np.uint8) )%train_valid_modulus
+    if kfold:
+        return j, e
     w = torch.FloatTensor( event['weight'].to_numpy().view(np.float32) )
     y = torch.LongTensor( np.asarray(event['class'], dtype=np.uint8) )
     R  = 1*torch.LongTensor( event['SB'].to_numpy().view(np.uint8) )
     R += 2*torch.LongTensor( event['SR'].to_numpy().view(np.uint8) )
-    e = torch.LongTensor( np.asarray(event['event'], dtype=np.uint8) )%train_valid_modulus
     if device != 'cpu':
         j, y, w, R, e = j.to(device), y.to(device), w.to(device), R.to(device), e.to(device)
     dataset = TensorDataset(j, y, w, R, e)
@@ -129,15 +131,15 @@ class Model:
         self.bs_change = []
 
         if model_file:
-            model_name_parts = model_file.split('_')
-            self.task = model_name_parts[0]
+            print(f'Load {model_file}')
+            model_name_parts = re.split(r'[/_]', model_file)
+            self.task = model_name_parts[1]
             self.train_valid_offset = model_name_parts[model_name_parts.index('offset')+1]
             self.model_pkl = model_file
-            with torch.load(self.model_pkl) as model_dict:
-                self.model_dict = model_dict
-                self.network.load_state_dict(model_dict['model'])
-                self.optimizer.load_state_dict(model_dict['optimizer'])
-                self.epoch = model_dict['epoch']
+            self.model_dict = torch.load(self.model_pkl)
+            self.network.load_state_dict(self.model_dict['model'])
+            self.optimizer.load_state_dict(self.model_dict['optimizer'])
+            self.epoch = self.model_dict['epoch']
         
     def make_loaders(self, event):
         wd4 = sum(event[event.d4].weight)
@@ -277,15 +279,42 @@ if __name__ == '__main__':
             event['class'] = d4.index*event.d4 + d3.index*event.d3 # for binary classification this seems dumb, makes sense when you have multi-class classification
 
         model_args = {'task': task,
-                        'train_valid_offset': args.offset}
+                      'train_valid_offset': args.offset}
         t=Model(**model_args) # Four vs Threetag classification
         t.make_loaders(event)
         t.run_training()
 
     if args.model:
-        model_files = glob(args.model)
+        model_files = sorted(glob(args.model))
         models = []
         for model_file in model_files:
             models.append(Model(model_file=model_file))
 
-    
+        task = models[0].task
+        kfold = networks.K_Fold([model.network for model in models])
+
+        import uproot
+        import awkward as ak
+
+        picoAODs = glob('data/*picoAOD.root')
+        for picoAOD in picoAODs:
+            output_file = picoAOD.replace('picoAOD', task)
+            print(f'Generate kfold output for {picoAOD} -> {output_file}')
+            coffea_files = sorted(glob(picoAOD.replace('.root','*.coffea')))
+            event = load(coffea_files)
+            j, e = coffea_to_tensor(event, kfold=True)
+            c_logits, q_logits = kfold(j, e)
+            c_score, q_score = F.softmax(c_logits, dim=1), F.softmax(q_logits, dim=1)
+
+            with uproot.recreate(output_file) as output:
+                kfold_dict = {}
+                kfold_dict['q_0123'] = q_score[:,0].numpy()
+                kfold_dict['q_0213'] = q_score[:,1].numpy()
+                kfold_dict['q_0312'] = q_score[:,2].numpy()
+                for cl in classes:
+                    kfold_dict[cl.abbreviation] = c_score[:,cl.index].numpy()
+                if task == 'FvT':
+                    kfold_dict['rw'] = kfold_dict['d4'] / kfold_dict['d3']
+                output['Events'] = {task: ak.zip(kfold_dict),
+                                    'event': event.event}
+            

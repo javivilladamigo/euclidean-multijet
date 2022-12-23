@@ -1,7 +1,7 @@
 # conda create -n coffea_torch coffea pytorch
 # conda activate coffea_torch
 
-import time, pickle, os
+import time, pickle, os, argparse
 import awkward as ak
 import numpy as np
 from functools import partial
@@ -14,6 +14,7 @@ from coffea.nanoevents import NanoEventsFactory, NanoAODSchema, BaseSchema
 from coffea import processor, util
 from coffea.nanoevents.methods import vector
 ak.behavior.update(vector.behavior)
+from ClassifierSchema import ClassifierSchema
 
 NanoAODSchema.warn_missing_crossrefs = False
 import warnings
@@ -22,8 +23,10 @@ warnings.filterwarnings("ignore")
 
 
 class analysis(processor.ProcessorABC):
-    def __init__(self):
+    def __init__(self, save=False, fvt='FvT'):
         self.debug = False
+        self.save = save
+        self.fvt = fvt
     
     def process(self, event):
         tstart = time.time()
@@ -39,6 +42,14 @@ class analysis(processor.ProcessorABC):
             with open(norm, 'rb') as nfile:
                 norm = pickle.load(nfile)['norm']
                 event['weight'] = norm * event.weight
+
+        fvt_path = dataset.replace('picoAOD', self.fvt)
+        fvt_exists = os.path.exists(fvt_path)
+        if fvt_exists:
+            event['FvT'] = NanoEventsFactory.from_root(fvt_path, entry_start=estart, entry_stop=estop, schemaclass=ClassifierSchema).events().FvT
+
+        if event.metadata.get('reweight', False) and 'threeTag' in dataset:
+            event['weight'] = event.FvT.rw * event.weight
 
         dataset_axis = hist.axis.StrCategory([], growth=True, name='dataset', label='Dataset')
         cut_axis     = hist.axis.StrCategory([], growth=True, name='cut',     label='Cut')
@@ -72,7 +83,14 @@ class analysis(processor.ProcessorABC):
                                                              lead_st_dr_axis,
                                                              subl_st_dr_axis,
                                                              storage='weight', label='Events')
-        
+
+        if fvt_exists:
+            fvt_axis = hist.axis.Regular(50, 0, 5, name='rw', label='FvT P(D4)/P(D3)')
+            output['hists']['FvT_rw'] = hist.Hist(dataset_axis,
+                                                  cut_axis,
+                                                  region_axis,
+                                                  fvt_axis,
+                                                  storage='weight', label='Events')
 
         # compute four-vector of sum of jets, for the toy samples there are always four jets
         v4j = event.Jet.sum(axis=1)
@@ -160,7 +178,8 @@ class analysis(processor.ProcessorABC):
         mask = event.preselection & event.SR
         self.fill(output, event[mask], dataset=dataset, cut='preselection', region='SR')
 
-        util.save(event, dataset.replace('.root',f'_{estart:07d}_{estop:07d}.coffea'))
+        if self.save:
+            util.save(event, dataset.replace('.root',f'_{estart:07d}_{estop:07d}.coffea'))
                 
         # Done
         elapsed = time.time() - tstart
@@ -180,13 +199,25 @@ class analysis(processor.ProcessorABC):
         output['hists']['lead_st_dr_subl_st_dr'].fill(
             dataset=dataset, cut=cut, region=region,
             lead=event.quadJet_selected.lead.dr, subl=event.quadJet_selected.subl.dr, weight=event.weight)
-
+        if 'FvT_rw' in output['hists']:
+            output['hists']['FvT_rw'].fill(
+                dataset=dataset, cut=cut, region=region,
+                rw=event.FvT.rw, weight=event.weight)
+            
     def postprocess(self, accumulator):
         pass
 
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-n', '--normalize', default=False, action='store_true', help='Normalize threeTag sample to fourTag in SB')
+    parser.add_argument('--normfile', default='data/normalize.pkl', help='Normalize file')
+    parser.add_argument('-s', '--save',      default=False, action='store_true', help='Save coffea files')
+    parser.add_argument('-r', '--reweight',  default=False, action='store_true', help='Apply FvT kinematic reweight to threeTag sample')
+    parser.add_argument('--fvt', default='FvT', help='string to replace picoAOD for FvT reweight file')
+    args = parser.parse_args()
+
     datasets  = []
     datasets += ['data/fourTag_picoAOD.root']
     datasets += ['data/threeTag_picoAOD.root']
@@ -199,16 +230,19 @@ if __name__ == '__main__':
                             'metadata': {}}
 
     outfile = 'data/hists.pkl'
-    normfile = 'data/normalize.pkl'
-    if os.path.exists(normfile):
-        print(f'Normalize threeTag with {normfile}')
+    if args.normalize or args.reweight:
+        print(f'Normalize threeTag with {args.normfile}')
+        fileset['data/threeTag_picoAOD.root']['metadata']['normalize'] = args.normfile
         outfile = 'data/hists_normalized.pkl'
-        fileset['data/threeTag_picoAOD.root']['metadata']['normalize'] = normfile
-
+    if args.reweight:
+        print(f'Apply kinematic reweighting using {args.fvt}')
+        fileset['data/threeTag_picoAOD.root']['metadata']['reweight']  = args.reweight
+        outfile = 'data/hists_reweighted.pkl'
+        
     tstart = time.time()
     output = processor.run_uproot_job(fileset,
                                       treename='Events',
-                                      processor_instance=analysis(),
+                                      processor_instance=analysis(save=args.save, fvt=args.fvt),
                                       executor=processor.futures_executor,
                                       executor_args={'schema': NanoAODSchema, 'workers': 4},
                                       chunksize=100_000,

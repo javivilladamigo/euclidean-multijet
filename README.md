@@ -8,8 +8,15 @@ conda activate coffea_torch
 ```
 python python/analysis.py
 python python/normalize.py # compute norm for threeTag to fourTag in SB
-python python/analysis.py # run again, this time normalizing threeTag to fourTag
+python python/analysis.py --normalize --save # run again, this time normalizing threeTag to fourTag. Save coffea files with derived quantities for use in classifier training
 python python/plots.py
+```
+Once you have produced the FvT reweight files (using the training steps below), you can run again and plot the results
+```
+python python/analysis.py --normalize # Make FvT hists without reweighting
+python python/analysis.py --reweight  # Make FvT hists with reweighting
+python python/plots.py --hists data/hists_normalized.pkl --plots plots/normalized
+python python/plots.py --hists data/hists_reweighted.pkl --plots plots/reweighted
 ```
 
 # Train
@@ -24,5 +31,5 @@ python python/train.py --train --offset 2
 ```
 We can precompute friend TTrees of the 3-fold model output to make it fast and easy to plot the results in relation to other kinematic quantities.
 ```
-python python/train.py --update --model "models/"
+python python/train.py --model "models/FvT_Basic_CNN_8_offset_*_epoch_20.pkl"
 ```
