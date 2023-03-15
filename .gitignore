@@ -2,3 +2,5 @@
 *.pdf
 *.coffea
 *#*
+.DS_Store
+__pycache__/
