@@ -27,6 +27,9 @@ class ClassInfo:
 d4 = ClassInfo(abbreviation='d4', name= 'FourTag Data', color='red')
 d3 = ClassInfo(abbreviation='d3', name='ThreeTag Data', color='orange')
 
+S = ClassInfo(abbreviation='S', name='Signal Data', color='red')
+BG = ClassInfo(abbreviation='BG', name='Background Data', color='orange')
+
 def load(cfiles, selection=''):
     event_list = []
     for cfile in cfiles:
@@ -37,13 +40,17 @@ def load(cfiles, selection=''):
         event_list.append(event)
     return ak.concatenate(event_list)
 
-classes = [d4,d3]
-for i,c in enumerate(classes): c.index=i
+FvT_classes = [d4, d3]
+SvB_classes = [BG, S]
+
+for i, c in enumerate(FvT_classes): c.index = i
+
+for i, c in enumerate(SvB_classes): c.index = i
 
 # convert coffea objects in to pytorch tensors
 train_valid_modulus = 3
 def coffea_to_tensor(event, device='cpu', kfold=False):
-    j = torch.FloatTensor( event['Jet',('pt','eta','phi','mass')].to_numpy().view(np.float32).reshape(-1,4,4) ) # [event,jet,feature]
+    j = torch.FloatTensor( event['Jet',('pt','eta','phi','mass')].to_numpy().view(np.float32).reshape(-1, 4, 4) ) # [event,jet,feature]
     j = j.transpose(1,2).contiguous() # [event,feature,jet]
     e = torch.LongTensor( np.asarray(event['event'], dtype=np.uint8) )%train_valid_modulus
     if kfold:
@@ -57,7 +64,7 @@ def coffea_to_tensor(event, device='cpu', kfold=False):
     dataset = TensorDataset(j, y, w, R, e)
     return dataset
 
-
+num_epochs = 2
 lr_init  = 0.01
 lr_scale = 0.25
 bs_scale = 2
@@ -73,6 +80,7 @@ num_workers=8
 class Loader_Result:
     def __init__(self, model, dataset, n_classes=2, train=False):
         self.dataset = dataset
+        # infer loader shuffle has been changed to True (originally it was False)
         self.infer_loader = DataLoader(dataset=dataset, batch_size=infer_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
         self.train_loader = DataLoader(dataset=dataset, batch_size=train_batch_size, shuffle=True,  num_workers=num_workers, pin_memory=True, drop_last=True) if train else None
         self.n = len(dataset)
@@ -90,9 +98,20 @@ class Loader_Result:
         
     def infer_batch(self, c_logits, q_logits, y, w, R, e):
         n_batch = c_logits.shape[0]
+        
+        #sys.stdout.write(f'\nn_batch shape = {n_batch}\n')
         # y_pred_batch = F.softmax(c_logits, dim=-1)
-        cross_entropy_batch = F.cross_entropy(c_logits, y, reduction='none')
 
+        #torch.save(c_logits, f"python/c_logits_{task}.pkl")
+        #torch.save(y, f"python/y_{task}.pkl")
+
+        cross_entropy_batch = F.cross_entropy(c_logits, y, reduction='none')
+        #sys.stdout.write(f'\nCross entropy computed\n')
+        
+        #torch.save(cross_entropy_batch, f"python/cross_entropy_batch_{task}.pkl")
+        
+        
+        #sys.stdout.write(f'\nExiting...\n'); sys.exit()
         self.cross_entropy[self.n_done:self.n_done+n_batch] = cross_entropy_batch
 
         self.n_done += n_batch
@@ -109,6 +128,13 @@ class Loader_Result:
             w_isSB_sum = w_isSB.sum()
             cross_entropy_batch = F.cross_entropy(c_logits[isSB], y[isSB], reduction='none')
             loss_batch = (w_isSB * cross_entropy_batch).sum()/w_isSB_sum/self.loaded_die_loss
+        
+        if self.task=='SvB':
+            
+
+            w_sum = w.sum()
+            cross_entropy_batch = F.cross_entropy(c_logits, y, reduction='none')
+            loss_batch = (w * cross_entropy_batch).sum()/w_sum/self.loaded_die_loss
             
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate*0.98 + loss_batch.item()*(1-0.98) # running average with 0.98 exponential decay rate
@@ -142,14 +168,26 @@ class Model:
             self.epoch = self.model_dict['epoch']
         
     def make_loaders(self, event):
-        wd4 = sum(event[event.d4].weight)
-        wd3 = sum(event[event.d3].weight)
-        w   = sum(event.weight)
-        fC = torch.FloatTensor([wd4/w, wd3/w])
-        # compute the loss you would get if you only used the class fraction to predict class probability (ie an n_class sided die loaded to land with the right fraction on each class)
-        self.loaded_die_loss = -(fC*fC.log()).sum()
+        
+        if task == 'FvT':
+            wd4 = sum(event[event.d4].weight)
+            wd3 = sum(event[event.d3].weight)
+            w   = sum(event.weight)
+            fC = torch.FloatTensor([wd4/w, wd3/w])
+            # compute the loss you would get if you only used the class fraction to predict class probability (ie an n_class sided die loaded to land with the right fraction on each class)
+            self.loaded_die_loss = -(fC*fC.log()).sum()
 
-        #Split into training and validaiton sets and format into pytorch tensors
+        # let's assume that the loaded_die_loss can be computed in a similar fashion for the case of SvB
+        if task == 'SvB':
+            wS  = sum(event[event.S].weight)
+            wBG = sum(event[event.BG].weight)
+
+            w   = sum(event.weight)
+            fC = torch.FloatTensor([wS/w, wBG/w])
+
+            self.loaded_die_loss = -(fC*fC.log()).sum() 
+
+        # Split into training and validation sets and format into pytorch tensors
         valid = event.event%train_valid_modulus == self.train_valid_offset
         train = ~valid
 
@@ -165,10 +203,20 @@ class Model:
     @torch.no_grad()
     def inference(self, result):
         self.network.eval()
+        #sys.stdout.write('\nnetwork.eval() done\n')
 
         for i, (j, y, w, R, e) in enumerate(result.infer_loader):
+
+            
+
             c_logits, q_logits = self.network(j)
+
+            #sys.stdout.write(f'\nc_logits, q_logits shape = {c_logits.shape}, {q_logits.shape}\n')
+            #sys.stdout.write(f'\ny, w, R, e shapes= {y.shape, w.shape, R.shape, e.shape}\n')
+
             result.infer_batch(c_logits, q_logits, y, w, R, e)
+
+            #sys.stdout.write(f'\nresult.infer_batch(c_logits, q_logits, y, w, R, e) = {result.infer_batch(c_logits, q_logits, y, w, R, e)}\n')
 
             percent = float(i+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -177,11 +225,15 @@ class Model:
         result.infer_done()
 
     def train_inference(self):
+
+        sys.stdout.write('\nEntering train_inference()\n')
+
         self.inference(self.train_result)
+
         sys.stdout.write(' '*SCREEN_WIDTH)
         sys.stdout.flush()
         print('\r',end='')
-        print(f'Epoch {self.epoch:>2} | Training   | Loss {self.train_result.loss:1.5}')
+        print(f'\nEpoch {self.epoch:>2} | Training | Loss {self.train_result.loss:1.5}')
 
     def valid_inference(self):
         self.inference(self.valid_result)
@@ -233,9 +285,18 @@ class Model:
 
     def run_training(self):
         self.network.set_mean_std(self.train_result.dataset.tensors[0])
+        
+        sys.stdout.write('\nMean and standard deviations set\n')
+        
         self.train_inference()
+
+        sys.stdout.write('\ntrain_inference() done\n')
+
         self.valid_inference()
-        for _ in range(20):
+
+        sys.stdout.write('\nvalid_inference() done\n')
+
+        for _ in range(num_epochs):
             self.run_epoch()
         self.save_model()
 
@@ -254,12 +315,30 @@ class Model:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--train', default=False, action='store_true', help='Run model training')
+    parser.add_argument('-fvt', '--FvT', default=False, action='store_true', help='Run FvT classifier')
+    parser.add_argument('-svb', '--SvB', default=False, action='store_true', help='Run SvB')
     parser.add_argument('-o', '--offset', default=0, type=int, help='k-folding offset for split between training/validation sets')
     parser.add_argument('-m', '--model', default='', type=str, help='Load these models (* wildcard for offsets)')
     args = parser.parse_args()
 
-    if args.train:
+    
+    if args.FvT:
         task = 'FvT'
+    elif args.SvB:
+        task = 'SvB'
+    else:
+        sys.exit("Task not specified. Use --FvT or --SvB. Exiting...")
+
+    classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
+
+    if args.train:
+        
+
+        
+
+        '''
+        The task is FourTag vs. ThreeTag
+        '''
         #Load data
         if task == 'FvT':
             coffea_4b = sorted(glob('data/fourTag_picoAOD*.coffea'))
@@ -277,12 +356,40 @@ if __name__ == '__main__':
             event = ak.concatenate([event_3b, event_4b])
 
             event['class'] = d4.index*event.d4 + d3.index*event.d3 # for binary classification this seems dumb, makes sense when you have multi-class classification
+        
+
+        '''
+        The task is Signal vs. Background classification
+        '''
+        #Load data
+        if task == 'SvB':
+            coffea_signal = sorted(glob('data/HH4b_picoAOD*.coffea'))
+            coffea_background = sorted(glob('data/threeTag_picoAOD*.coffea'))
+
+            event_signal = load(coffea_signal, selection='event.preselection & event.SB') # am I suppose to use the SR here or just relax the criteria?
+            event_background = load(coffea_background, selection='event.preselection & event.SB')
+
+            event_signal['S'] = True
+            event_signal['BG'] = False
+
+            event_background['S'] = False
+            event_background['BG'] = True
+
+            event = ak.concatenate([event_signal, event_background])
+
+            event['class'] = S.index*event.S + BG.index*event.BG # for binary classification this seems dumb, makes sense when you have multi-class classification
 
         model_args = {'task': task,
-                      'train_valid_offset': args.offset}
+                'train_valid_offset': args.offset}
         t=Model(**model_args) # Four vs Threetag classification
         t.make_loaders(event)
         t.run_training()
+
+
+
+
+
+
 
     if args.model:
         model_files = sorted(glob(args.model))
@@ -311,10 +418,16 @@ if __name__ == '__main__':
                 kfold_dict['q_0123'] = q_score[:,0].numpy()
                 kfold_dict['q_0213'] = q_score[:,1].numpy()
                 kfold_dict['q_0312'] = q_score[:,2].numpy()
+                
                 for cl in classes:
                     kfold_dict[cl.abbreviation] = c_score[:,cl.index].numpy()
+                
                 if task == 'FvT':
-                    kfold_dict['rw'] = kfold_dict['d4'] / kfold_dict['d3']
+                    kfold_dict['rw'] = kfold_dict['d4'] / kfold_dict['d3']                
+                if task == 'SvB':
+                    kfold_dict['ratioSB'] = kfold_dict['S'] / kfold_dict['BG']
+                
                 output['Events'] = {task: ak.zip(kfold_dict),
                                     'event': event.event}
+
             
