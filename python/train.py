@@ -64,7 +64,7 @@ def coffea_to_tensor(event, device='cpu', kfold=False):
     dataset = TensorDataset(j, y, w, R, e)
     return dataset
 
-num_epochs = 20
+num_epochs = 5
 lr_init  = 0.01
 lr_scale = 0.25
 bs_scale = 2
@@ -315,24 +315,23 @@ class Model:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--train', default=False, action='store_true', help='Run model training')
-    parser.add_argument('-fvt', '--FvT', default=False, action='store_true', help='Run FvT classifier')
-    parser.add_argument('-svb', '--SvB', default=False, action='store_true', help='Run SvB')
+    parser.add_argument('-tk', '--task', default='FvT', type = str, help='Type of classifier (FvT or SvB) to run')
     parser.add_argument('-o', '--offset', default=0, type=int, help='k-folding offset for split between training/validation sets')
     parser.add_argument('-m', '--model', default='', type=str, help='Load these models (* wildcard for offsets)')
     args = parser.parse_args()
 
-    
-    if args.FvT:
-        task = 'FvT'
-    elif args.SvB:
-        task = 'SvB'
-    else:
-        sys.exit("Task not specified. Use --FvT or --SvB. Exiting...")
 
-    classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
-    custom_selection = 'event.preselection & event.SR'
+ 
+    custom_selection = 'event.preselection & event.SB'
 
     if args.train:
+        if args.task:
+            task = args.task
+        else:
+            sys.exit("Task not specified. Use --FvT or --SvB. Exiting...")
+
+        classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
+
         '''
         The task is FourTag vs. ThreeTag
         '''
@@ -341,8 +340,8 @@ if __name__ == '__main__':
             coffea_4b = sorted(glob('data/fourTag_picoAOD*.coffea'))
             coffea_3b = sorted(glob('data/threeTag_picoAOD*.coffea'))
 
-            event_3b = load(coffea_3b, selection='event.preselection & event.SB')
-            event_4b = load(coffea_4b, selection='event.preselection & event.SB')
+            event_3b = load(coffea_3b, selection=custom_selection)
+            event_4b = load(coffea_4b, selection=custom_selection)
 
             event_3b['d3'] = True
             event_3b['d4'] = False
@@ -390,8 +389,8 @@ if __name__ == '__main__':
 
     if args.model:
 
-        if task != args.model[args.model.find('_Basic') - 3 : args.model.find('_Basic')]:
-            sys.exit('Task %s specified and model employs %s. Exiting to avoid conflicts...' % (task, args.model[args.model.find('_Basic') - 3 : args.model.find('_Basic')]))
+        task = args.model[args.model.find('_Basic') - 3 : args.model.find('_Basic')]
+        classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
 
         model_files = sorted(glob(args.model))
         models = []
