@@ -64,7 +64,7 @@ def coffea_to_tensor(event, device='cpu', kfold=False):
     dataset = TensorDataset(j, y, w, R, e)
     return dataset
 
-num_epochs = 5
+num_epochs = 20
 lr_init  = 0.01
 lr_scale = 0.25
 bs_scale = 2
@@ -322,7 +322,7 @@ if __name__ == '__main__':
 
 
  
-    custom_selection = 'event.preselection & event.SB'
+    custom_selection = 'event.preselection & event.SR'
 
     if args.train:
         if args.task:
