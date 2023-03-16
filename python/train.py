@@ -226,7 +226,7 @@ class Model:
 
     def train_inference(self):
 
-        sys.stdout.write('\nEntering train_inference()\n')
+        #sys.stdout.write('\nEntering train_inference()\n')
 
         self.inference(self.train_result)
 
@@ -286,15 +286,15 @@ class Model:
     def run_training(self):
         self.network.set_mean_std(self.train_result.dataset.tensors[0])
         
-        sys.stdout.write('\nMean and standard deviations set\n')
+        #sys.stdout.write('\nMean and standard deviations set\n')
         
         self.train_inference()
 
-        sys.stdout.write('\ntrain_inference() done\n')
+        #sys.stdout.write('\ntrain_inference() done\n')
 
         self.valid_inference()
 
-        sys.stdout.write('\nvalid_inference() done\n')
+        #sys.stdout.write('\nvalid_inference() done\n')
 
         for _ in range(num_epochs):
             self.run_epoch()
