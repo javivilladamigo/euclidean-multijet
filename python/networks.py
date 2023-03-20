@@ -366,7 +366,61 @@ class Basic_CNN(nn.Module):
 
         return c_logits, q_logits
 
+
+class CNN_AE(nn.Module):
+    def __init__(self, dimension, out_features = 12, device = 'cpu'):
+        super(CNN_AE, self).__init__()
+        self.device = device
+        self.d = dimension
+        self.out_features = out_features
+        self.n_ghost_batches = 64
+
+        self.name = f'CNN_AE_{self.d}'
+
+        self.input_embed = Input_Embed(self.d)
+        self.jets_to_dijets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        self.dijets_to_quadjets = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        
+        self.select_q = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+
+        self.out      = Ghost_Batch_Norm(self.d, features_out=self.out_features, conv=True, device = self.device)
+
     
+    def set_mean_std(self, j):
+        self.input_embed.set_mean_std(j)
+
+    
+    def set_ghost_batches(self, n_ghost_batches):
+        self.input_embed.set_ghost_batches(n_ghost_batches)
+        self.jets_to_dijets.set_ghost_batches(n_ghost_batches)
+        self.dijets_to_quadjets.set_ghost_batches(n_ghost_batches)
+        self.select_q.set_ghost_batches(n_ghost_batches)
+        self.out.set_ghost_batches(n_ghost_batches)
+        self.n_ghost_batches = n_ghost_batches
+    
+    def forward(self, j):
+        j, d, q = self.input_embed(j)
+
+        d = d + NonLU(self.jets_to_dijets(j))
+        q = q + NonLU(self.dijets_to_quadjets(d))
+
+        #compute a score for each event quadjet
+        q_logits = self.select_q(q)
+
+        #convert the score to a 'probability' with softmax. This way the classifier is learning which pairing is most relevant to the classification task at hand.
+        q_score = F.softmax(q_logits, dim=-1)
+        q_logits = q_logits.view(-1, 3)
+
+        #add together the quadjets with their corresponding probability weight
+        e = torch.matmul(q, q_score.transpose(1,2))
+
+        rec_j = NonLU(self.out(e))
+        rec_j = rec_j.view(-1, 4, 4) # convert to 4x4 events (4 jets x 4 features)
+        return rec_j
+
+
+
+
 class K_Fold(nn.Module):
     def __init__(self, models):
         super(K_Fold, self).__init__()

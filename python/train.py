@@ -49,22 +49,29 @@ for i, c in enumerate(SvB_classes): c.index = i
 
 # convert coffea objects in to pytorch tensors
 train_valid_modulus = 3
-def coffea_to_tensor(event, device='cpu', kfold=False):
+def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
     j = torch.FloatTensor( event['Jet',('pt','eta','phi','mass')].to_numpy().view(np.float32).reshape(-1, 4, 4) ) # [event,jet,feature]
     j = j.transpose(1,2).contiguous() # [event,feature,jet]
     e = torch.LongTensor( np.asarray(event['event'], dtype=np.uint8) )%train_valid_modulus
     if kfold:
         return j, e
     w = torch.FloatTensor( event['weight'].to_numpy().view(np.float32) )
-    y = torch.LongTensor( np.asarray(event['class'], dtype=np.uint8) )
     R  = 1*torch.LongTensor( event['SB'].to_numpy().view(np.uint8) )
     R += 2*torch.LongTensor( event['SR'].to_numpy().view(np.uint8) )
     if device != 'cpu':
-        j, y, w, R, e = j.to(device), y.to(device), w.to(device), R.to(device), e.to(device)
-    dataset = TensorDataset(j, y, w, R, e)
+        j, w, R, e = j.to(device), w.to(device), R.to(device), e.to(device)
+
+    if decode == False:
+        y = torch.LongTensor( np.asarray(event['class'], dtype=np.uint8) )
+        y = y.to(device)
+        dataset = TensorDataset(j, y, w, R, e)
+    else:
+        y = None
+        dataset = TensorDataset(j, w, R, e)
+    
     return dataset
 
-num_epochs = 20
+num_epochs = 2
 lr_init  = 0.01
 lr_scale = 0.25
 bs_scale = 2
@@ -87,8 +94,9 @@ class Loader_Result:
         self.w = dataset.tensors[2]
         self.w_sum = self.w.sum()
         self.cross_entropy = torch.zeros(self.n)
+        self.decoding_loss = torch.zeros(self.n)
         self.n_done = 0
-        self.loaded_die_loss = model.loaded_die_loss
+        self.loaded_die_loss = model.loaded_die_loss if hasattr(model, 'loaded_die_loss') else None
         self.loss_estimate = 1.0
         self.history = {'loss': []}
         self.task = model.task
@@ -98,26 +106,31 @@ class Loader_Result:
         
     def infer_batch(self, c_logits, q_logits, y, w, R, e):
         n_batch = c_logits.shape[0]
-        
         #sys.stdout.write(f'\nn_batch shape = {n_batch}\n')
         # y_pred_batch = F.softmax(c_logits, dim=-1)
-
         #torch.save(c_logits, f"python/c_logits_{task}.pkl")
         #torch.save(y, f"python/y_{task}.pkl")
-
         cross_entropy_batch = F.cross_entropy(c_logits, y, reduction='none')
         #sys.stdout.write(f'\nCross entropy computed\n')
-        
         #torch.save(cross_entropy_batch, f"python/cross_entropy_batch_{task}.pkl")
-        
-        
         #sys.stdout.write(f'\nExiting...\n'); sys.exit()
         self.cross_entropy[self.n_done:self.n_done+n_batch] = cross_entropy_batch
 
         self.n_done += n_batch
 
+    def infer_batch_AE(self, j, rec_j):
+        n_batch = rec_j.shape[0]
+        l1_loss_batch = (F.l1_loss(rec_j, networks.PxPyPzE(j), reduction = 'none') / networks.PxPyPzE(j)).mean() # compute the MSE loss between reconstructed jets and input jets
+        self.decoding_loss[self.n_done : self.n_done + n_batch] = l1_loss_batch
+        self.n_done += n_batch
+
     def infer_done(self):
         self.loss = (self.w * self.cross_entropy).sum()/self.w_sum/self.loaded_die_loss
+        self.history['loss'].append(copy(self.loss))
+        self.n_done = 0
+    
+    def infer_done_AE(self):
+        self.loss = (self.w * self.decoding_loss).sum() / self.w_sum # not sure if this makes sense for MSE loss
         self.history['loss'].append(copy(self.loss))
         self.n_done = 0
 
@@ -139,6 +152,15 @@ class Loader_Result:
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate*0.98 + loss_batch.item()*(1-0.98) # running average with 0.98 exponential decay rate
 
+    def train_batch_AE(self, j, rec_j):
+     
+        l1_loss_batch = (F.l1_loss(rec_j, networks.PxPyPzE(j), reduction = 'none') / networks.PxPyPzE(j)).mean()
+
+        ###### here im using self.w instead of passing w as an argument as in train_batch() --> possibly subject to change
+        loss_batch = (self.w * l1_loss_batch).sum() / self.w_sum
+
+        loss_batch.backward()
+        self.loss_estimate = self.loss_estimate * 0. + loss_batch.item() * (1) # running average with 0.98 exponential decay rate
 
 class Model:
     def __init__(self, train_valid_offset=0, device='cpu', task='FvT', model_file=''): # FvT == Four vs Threetag classification
@@ -233,7 +255,7 @@ class Model:
         sys.stdout.write(' '*SCREEN_WIDTH)
         sys.stdout.flush()
         print('\r',end='')
-        print(f'\nEpoch {self.epoch:>2} | Training | Loss {self.train_result.loss:1.5}')
+        print(f'\nEpoch {self.epoch:>2} | Training  | Loss {self.train_result.loss:1.5}')
 
     def valid_inference(self):
         self.inference(self.valid_result)
@@ -310,8 +332,171 @@ class Model:
         self.model_pkl = f'models/{self.task}_{self.network.name}_offset_{self.train_valid_offset}_epoch_{self.epoch:02d}.pkl'
         print(self.model_pkl)
         torch.save(self.model_dict, self.model_pkl)
-        
 
+
+
+
+
+
+
+
+
+
+
+
+class Model_AE:
+    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'decode', model_file = ''):
+        self.task = task
+        self.device = device
+        self.train_valid_offset = train_valid_offset
+        self.network = networks.CNN_AE(8, 16) # keep for now 4 features for each of the output jet
+        self.network.to(self.device)
+        n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
+        print(f'Network has {n_trainable_parameters} trainable parameters')
+        self.epoch = 0
+        self.lr_current = lr_init
+        self.optimizer = optim.Adam(self.network.parameters(), lr=lr_init, amsgrad=False)
+        self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, lr_milestones, gamma=lr_scale, last_epoch=-1)
+        self.lr_change = []
+        self.bs_change = []
+
+        if model_file:
+            print(f'Load {model_file}')
+            model_name_parts = re.split(r'[/_]', model_file)
+            self.task = model_name_parts[1]
+            self.train_valid_offset = model_name_parts[model_name_parts.index('offset')+1]
+            self.model_pkl = model_file
+            self.model_dict = torch.load(self.model_pkl)
+            self.network.load_state_dict(self.model_dict['model'])
+            self.optimizer.load_state_dict(self.model_dict['optimizer'])
+            self.epoch = self.model_dict['epoch']
+        
+    def make_loaders(self, event):
+        '''
+        Split into training and validation, define datasets and format into pytorch tensors, declare train_result and valid_result
+        '''
+        # Split into training and validation sets and format into pytorch tensors
+        valid = event.event%train_valid_modulus == self.train_valid_offset
+        train = ~valid
+
+        dataset_train = coffea_to_tensor(event[train], device=self.device, decode = True)
+        dataset_valid = coffea_to_tensor(event[valid], device=self.device, decode = True)
+
+        self.train_result = Loader_Result(self, dataset_train, train=True)
+        self.valid_result = Loader_Result(self, dataset_valid)
+
+        print(f'{self.train_result.n:,} training samples split into {len(self.train_result.train_loader):,} batches of {train_batch_size:,}')
+    
+    @torch.no_grad()
+    def inference(self, result):
+        '''
+        Reconstruct the jets in inference mode and compute the loss
+        '''
+        self.network.eval()
+
+        # nb, event jets vector, label, weight, region, event number
+        for i, (j, w, R, e) in enumerate(result.infer_loader):
+            rec_j = self.network(j)
+
+            result.infer_batch_AE(j, rec_j)
+
+            percent = float(i+1)*100/len(result.infer_loader)
+            sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
+            sys.stdout.flush()
+
+        result.infer_done_AE()
+
+    def train_inference(self):
+        self.inference(self.train_result)
+        sys.stdout.write(' '*SCREEN_WIDTH)
+        sys.stdout.flush()
+        print('\r',end='')
+        print(f'\nEpoch {self.epoch:>2} | Training | Loss {self.train_result.loss:1.5}')
+
+    def valid_inference(self):
+        self.inference(self.valid_result)
+        sys.stdout.write(' '*SCREEN_WIDTH)
+        sys.stdout.flush()
+        print('\r',end='')
+        print(f'         | Validation | Loss {self.valid_result.loss:1.5}')
+
+    def train(self, result=None):
+        if result is None: result = self.train_result
+        self.network.train() # inherited from nn.Module()
+
+        for i, (j, w, R, e) in enumerate(result.train_loader):
+            self.optimizer.zero_grad()
+            rec_j = self.network(j) # forward pass
+            result.train_batch_AE(j, rec_j)
+
+            percent = float(i+1)*100/len(result.train_loader)
+            sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
+            sys.stdout.flush()
+
+            self.optimizer.step()
+    
+    def increment_train_loader(self, new_batch_size = None):
+        current_batch_size = self.train_result.train_loader.batch_size
+        if new_batch_size is None: new_batch_size = current_batch_size * bs_scale
+        if new_batch_size == current_batch_size: return
+        print(f'Change training batch size: {current_batch_size} -> {new_batch_size} ({self.train_result.n//new_batch_size} batches)')
+        del self.train_result.train_loader
+        self.train_result.train_loader = DataLoader(dataset=self.train_result.dataset, batch_size=new_batch_size, shuffle=True, num_workers=num_workers, pin_memory=True, drop_last=True)
+        self.bs_change.append(self.epoch)
+
+    def run_epoch(self):
+        self.epoch += 1
+        self.train()
+        self.train_inference()
+        self.valid_inference()
+        self.scheduler.step()
+        
+        if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
+            gb_decay = 4 # 2 if self.epoch in bs_mile
+            print(f'set_ghost_batches({self.network.n_ghost_batches//gb_decay})')
+            self.network.set_ghost_batches(self.network.n_ghost_batches//gb_decay)
+            if self.epoch in bs_milestones:
+                self.increment_train_loader()
+            if self.epoch in lr_milestones:
+                print(f'Decay learning rate: {self.lr_current} -> {self.lr_current*lr_scale}')
+                self.lr_current *= lr_scale
+                self.lr_change.append(self.epoch)
+
+    def run_training(self):
+        self.network.set_mean_std(self.train_result.dataset.tensors[0])
+        
+        #sys.stdout.write('\nMean and standard deviations set\n')
+        
+        self.train_inference()
+
+        #sys.stdout.write('\ntrain_inference() done\n')
+
+        self.valid_inference()
+
+        #sys.stdout.write('\nvalid_inference() done\n')
+
+        for _ in range(num_epochs):
+            self.run_epoch()
+        self.save_model()
+    
+    def save_model(self):
+        self.history = {'train': self.train_result.history,
+                        'valid': self.valid_result.history}
+        self.model_dict = {'model': deepcopy(self.network.state_dict()),
+                           'optimizer': deepcopy(self.optimizer.state_dict()),
+                           'epoch': self.epoch,
+                           'history': copy(self.history)}
+        self.model_pkl = f'models/{self.task}_{self.network.name}_offset_{self.train_valid_offset}_epoch_{self.epoch:02d}.pkl'
+        print(self.model_pkl)
+        torch.save(self.model_dict, self.model_pkl)
+
+
+
+
+
+
+
+    
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--train', default=False, action='store_true', help='Run model training')
@@ -352,7 +537,14 @@ if __name__ == '__main__':
             event = ak.concatenate([event_3b, event_4b])
 
             event['class'] = d4.index*event.d4 + d3.index*event.d3 # for binary classification this seems dumb, makes sense when you have multi-class classification
+
+            model_args = {'task': task,
+                      'train_valid_offset': args.offset}
         
+            t=Model(**model_args) # Four vs Threetag classification
+            t.make_loaders(event)
+            t.run_training()
+
 
         '''
         The task is Signal vs. Background classification
@@ -375,12 +567,31 @@ if __name__ == '__main__':
 
             event['class'] = S.index*event.S + BG.index*event.BG # for binary classification this seems dumb, makes sense when you have multi-class classification
 
-        model_args = {'task': task,
-                'train_valid_offset': args.offset}
-        t=Model(**model_args) # Four vs Threetag classification
-        t.make_loaders(event)
-        t.run_training()
+            model_args = {'task': task,
+                      'train_valid_offset': args.offset}
+        
+            t=Model(**model_args)
+            t.make_loaders(event)
+            t.run_training()
 
+
+
+        if task == 'decode':
+            coffea_file = sorted(glob('data/HH4b_picoAOD*.coffea'))
+
+            event = load(coffea_file, selection = custom_selection)
+
+            model_args = {'task': task,
+                      'train_valid_offset': args.offset}
+        
+
+            t=Model_AE(**model_args)
+            t.make_loaders(event)
+            t.run_training()
+
+
+
+        
 
 
 
