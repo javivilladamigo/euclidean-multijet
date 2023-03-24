@@ -3,6 +3,8 @@ import hist
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+
 plt.rc('text', usetex=True)
 plt.rc('font', family='serif')
 
@@ -100,6 +102,54 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
     print(name)
     fig.savefig(name)
     plt.close()
+
+
+def plot_training_residuals(true_val, reco_val, epoch): # expects [batch, (3) features, (4) jets] shaped tensors
+    import matplotlib
+    #matplotlib.use('qtagg')
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    import numpy as np
+    import torch
+    #from fast_histogram import histogram2d
+
+    true_val = true_val.detach()
+    reco_val = reco_val.detach()
+    res = reco_val - true_val
+
+    cmap = cm.get_cmap("viridis")
+    #cc.cm["CET_L17"].copy()
+    
+    fig, ax = plt.subplots(1, 3, figsize = (15, 5))
+    cbar_ax = fig.add_axes([0.92, 0.1, 0.01, 0.8])
+    vmax_mob = 0
+    for i, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi\ ({\\rm rad})$"]):
+        bounds = [(true_val[:, i, :].min(), true_val[:, i, :].max()), (reco_val[:, i, :].min(), reco_val[:, i, :].max())]
+        '''
+        Implementation of fast histogram is weird: histogram2d produces a 2d plot that makes NO sense in the confrontation of y vs x (the correlation is lost somehow)
+        
+        h = histogram2d(true_val[:, i, :], reco_val[:, i, :], range=bounds, bins=100) # get the histogram of the i-th feature for all the events and all the jets
+        im = ax[i].imshow(h.T, cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = h.max()), extent= [*bounds[0], *bounds[1]], aspect = 'auto')
+        '''
+        
+        h2d, xbins, ybins, im = ax[i].hist2d(true_val[:, i, :].flatten().numpy(), reco_val[:, i, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 500), bins = (64, 64))
+
+        ax[i].tick_params(which = 'major', axis = 'both', direction='in', length = 6, labelsize = 10)
+        ax[i].minorticks_on()
+        ax[i].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
+
+        ax[i].set_xlabel(f'True {feature}')
+        ax[i].set_ylabel(f'Reco {feature}')
+
+        if h2d.max() > vmax_mob:
+            im_vmax = im
+            vmax_mob = h2d.max()
+    fig.show
+    fig.colorbar(im_vmax, cax=cbar_ax)
+    fig.subplots_adjust(top = 0.9, bottom=0.1, right=0.9)
+    path = "plots/autoencoder/residuals/"
+    mkpath(path)
+    fig.savefig(f'{path}residuals_epoch_{epoch:02d}.pdf')
 
 
 if __name__ == '__main__':

@@ -367,15 +367,15 @@ class Basic_CNN(nn.Module):
         return c_logits, q_logits
 
 
-class CNN_AE(nn.Module):
+class Basic_CNN_AE(nn.Module):
     def __init__(self, dimension, out_features = 12, device = 'cpu'):
-        super(CNN_AE, self).__init__()
+        super(Basic_CNN_AE, self).__init__()
         self.device = device
         self.d = dimension
         self.out_features = out_features
         self.n_ghost_batches = 64
 
-        self.name = f'CNN_AE_{self.d}'
+        self.name = f'Basic_CNN_AE_{self.d}'
 
         self.input_embed = Input_Embed(self.d)
         self.jets_to_dijets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
@@ -383,7 +383,19 @@ class CNN_AE(nn.Module):
         
         self.select_q = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
 
-        self.out      = Ghost_Batch_Norm(self.d, features_out=self.out_features, conv=True, device = self.device)
+
+        # any kind of self.out should convert a [batch_size, 8, 1] into a [batch_size, 16, 1]
+        self.out_lin = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = self.d, out_features = 10, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.ReLU(),
+            nn.Linear(in_features = 10, out_features = self.out_features, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (self.out_features, 1))
+        )
+
+
+        self.out_GBN      = Ghost_Batch_Norm(self.d, features_out=self.out_features, conv=True, device = self.device)
 
     
     def set_mean_std(self, j):
@@ -395,10 +407,20 @@ class CNN_AE(nn.Module):
         self.jets_to_dijets.set_ghost_batches(n_ghost_batches)
         self.dijets_to_quadjets.set_ghost_batches(n_ghost_batches)
         self.select_q.set_ghost_batches(n_ghost_batches)
-        self.out.set_ghost_batches(n_ghost_batches)
+        self.out_GBN.set_ghost_batches(n_ghost_batches)
         self.n_ghost_batches = n_ghost_batches
+
+    def inverse_tfm(self, reconstructed_jets):
+        # function to re-apply the inverse transformations to the jets
+        return
     
     def forward(self, j):
+        j_scaled = j.clone()
+        batch_mean = j.mean(dim = (0, 2))
+        batch_std = j.std(dim = (0, 2))
+
+            
+
         j, d, q = self.input_embed(j)
 
         d = d + NonLU(self.jets_to_dijets(j))
@@ -414,35 +436,55 @@ class CNN_AE(nn.Module):
         #add together the quadjets with their corresponding probability weight
         e = torch.matmul(q, q_score.transpose(1,2))
 
-        rec_j = NonLU(self.out(e))
-        rec_j = rec_j.view(-1, 4, 4) # convert to 4x4 events (4 jets x 4 features)
-        return rec_j
+        rec_j = self.out_lin(e)
+        rec_j = rec_j.view(-1, 3, 4) # convert to 3x4 events (3 features x 4 jets)
+
+        rec_j_scaled = rec_j.clone()
+        for i in range(len(rec_j[0, :, 0])):
+            # obtained a normalized j for the computation of the loss
+            #print(i,"-th mean,std:", batch_mean[i], batch_std[i])
+            j_scaled[:, i, :] = (j_scaled[:, i, :] - batch_mean[i]) / batch_std[i]
+            rec_j_scaled[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
+        
+        return rec_j, rec_j_scaled, j_scaled # output the rec_j, also the scaled variables for loss computation
 
 
 
 
 class K_Fold(nn.Module):
-    def __init__(self, models):
+    def __init__(self, models, task = 'FvT'):
         super(K_Fold, self).__init__()
         self.models = models
         for model in self.models:
             model.eval()
+        self.task = task
 
     @torch.no_grad()
     def forward(self, j, e):
 
-        c_logits = torch.zeros(j.shape[0], self.models[0].n_classes)
-        q_logits = torch.zeros(j.shape[0], 3)
+        if self.task == 'SvB' or self.task == 'FvT': # i.e. if task is classification
+            c_logits = torch.zeros(j.shape[0], self.models[0].n_classes)
+            q_logits = torch.zeros(j.shape[0], 3)
 
-        for offset, model in enumerate(self.models):
-            mask = (e==offset)
-            c_logits[mask], q_logits[mask] = model(j[mask])
+            for offset, model in enumerate(self.models):
+                mask = (e==offset)
+                c_logits[mask], q_logits[mask] = model(j[mask])
 
-        # shift logits to have mean zero over quadjets/classes. Has no impact on output of softmax, just makes logits easier to interpret
-        c_logits = c_logits - c_logits.mean(dim=-1, keepdim=True)
-        q_logits = q_logits - q_logits.mean(dim=-1, keepdim=True)
+            # shift logits to have mean zero over quadjets/classes. Has no impact on output of softmax, just makes logits easier to interpret
+            c_logits = c_logits - c_logits.mean(dim=-1, keepdim=True)
+            q_logits = q_logits - q_logits.mean(dim=-1, keepdim=True)
 
-        return c_logits, q_logits            
+            return c_logits, q_logits
+        
+        elif self.task == 'dec':
+            rec_j = torch.zeros(j.shape[0], 3, 4) # [batch_size, 4jets, 4features]
+
+            for offset, model in enumerate(self.models):
+                #mask = (e==offset)
+                rec_j, rec_j_scaled, j_scaled = model(j)
+            
+            return rec_j
+
 
 
     

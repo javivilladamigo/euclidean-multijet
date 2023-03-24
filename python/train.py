@@ -9,6 +9,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 import networks
+import plots
 
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1' #this doesn't work, need to run `conda env config vars set PYTORCH_ENABLE_MPS_FALLBACK=1` and then reactivate the conda environment
 
@@ -71,35 +72,44 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
     
     return dataset
 
-num_epochs = 2
+num_epochs = 1
 lr_init  = 0.01
 lr_scale = 0.25
 bs_scale = 2
-bs_milestones = [1,3,6,10]
-lr_milestones = [15,16,17,18,19,20,21,22,23,24]
+#bs_milestones = [1,3,6,10]
+#lr_milestones = [15,16,17,18,19,20,21,22,23,24]
+bs_milestones = [10000000]
+lr_milestones = [70, 80, 90]
 
-train_batch_size = 2**10
+train_loss_tosave = []
+val_loss_tosave = []
+
+#train_batch_size = 2**10
+train_batch_size = 2**8
 infer_batch_size = 2**14
 max_train_batch_size = train_batch_size*64
 
-num_workers=8
+num_workers=1
 
 class Loader_Result:
     def __init__(self, model, dataset, n_classes=2, train=False):
         self.dataset = dataset
-        # infer loader shuffle has been changed to True (originally it was False)
         self.infer_loader = DataLoader(dataset=dataset, batch_size=infer_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-        self.train_loader = DataLoader(dataset=dataset, batch_size=train_batch_size, shuffle=True,  num_workers=num_workers, pin_memory=True, drop_last=True) if train else None
+        self.train_loader = DataLoader(dataset=dataset, batch_size=train_batch_size, shuffle=False,  num_workers=num_workers, pin_memory=True, drop_last=True) if train else None
         self.n = len(dataset)
         self.w = dataset.tensors[2]
         self.w_sum = self.w.sum()
         self.cross_entropy = torch.zeros(self.n)
-        self.decoding_loss = torch.zeros(self.n)
+        self.decoding_loss = torch.zeros(self.n, 3, 4)
         self.n_done = 0
         self.loaded_die_loss = model.loaded_die_loss if hasattr(model, 'loaded_die_loss') else None
         self.loss_estimate = 1.0
         self.history = {'loss': []}
         self.task = model.task
+        self.train = train
+
+        self.res = torch.zeros(self.n, 3, 4)
+        self.true_value = torch.zeros(self.n, 3, 4)
 
     def eval(self):
         self.n_done = 0
@@ -118,10 +128,20 @@ class Loader_Result:
 
         self.n_done += n_batch
 
-    def infer_batch_AE(self, j, rec_j):
+    def infer_batch_AE(self, j, rec_j): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
-        l1_loss_batch = (F.l1_loss(rec_j, networks.PxPyPzE(j), reduction = 'none') / networks.PxPyPzE(j)).mean() # compute the MSE loss between reconstructed jets and input jets
-        self.decoding_loss[self.n_done : self.n_done + n_batch] = l1_loss_batch
+
+        
+        mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        
+
+        assert mse_loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and mse_loss_batch shapes mismatch"
+
+        self.decoding_loss[self.n_done : self.n_done + n_batch] = mse_loss_batch
+
+        self.res[self.n_done : self.n_done + n_batch] = rec_j - j
+        self.true_value[self.n_done : self.n_done + n_batch] = j
+
         self.n_done += n_batch
 
     def infer_done(self):
@@ -130,9 +150,12 @@ class Loader_Result:
         self.n_done = 0
     
     def infer_done_AE(self):
-        self.loss = (self.w * self.decoding_loss).sum() / self.w_sum # not sure if this makes sense for MSE loss
+
+        self.loss = (self.w * self.decoding_loss.permute(1,2,0)).permute(2,0,1).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
         self.history['loss'].append(copy(self.loss))
-        self.n_done = 0
+        train_loss_tosave.append(self.loss) if self.train else val_loss_tosave.append(self.loss)
+        self.n_done = 0 
+
 
     def train_batch(self, c_logits, q_logits, y, w, R, e):
         if self.task=='FvT':
@@ -143,8 +166,6 @@ class Loader_Result:
             loss_batch = (w_isSB * cross_entropy_batch).sum()/w_isSB_sum/self.loaded_die_loss
         
         if self.task=='SvB':
-            
-
             w_sum = w.sum()
             cross_entropy_batch = F.cross_entropy(c_logits, y, reduction='none')
             loss_batch = (w * cross_entropy_batch).sum()/w_sum/self.loaded_die_loss
@@ -152,15 +173,27 @@ class Loader_Result:
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate*0.98 + loss_batch.item()*(1-0.98) # running average with 0.98 exponential decay rate
 
-    def train_batch_AE(self, j, rec_j):
-     
-        l1_loss_batch = (F.l1_loss(rec_j, networks.PxPyPzE(j), reduction = 'none') / networks.PxPyPzE(j)).mean()
+    def train_batch_AE(self, j, rec_j, w): # expecting same sized j and rec_j
+        w_sum = w.sum()
+
+        mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none')
 
         ###### here im using self.w instead of passing w as an argument as in train_batch() --> possibly subject to change
-        loss_batch = (self.w * l1_loss_batch).sum() / self.w_sum
-
+        #print(w.shape,mse_loss_batch.shape)
+        loss_batch = ((w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w_sum) # multiply weight for all the jet features and recover the original shape of the features 
+        
         loss_batch.backward()
-        self.loss_estimate = self.loss_estimate * 0. + loss_batch.item() * (1) # running average with 0.98 exponential decay rate
+        self.loss_estimate = self.loss_estimate * 0. + loss_batch.item() * 1. # running average with 0.98 exponential decay rate
+
+
+
+
+
+
+
+
+
+
 
 class Model:
     def __init__(self, train_valid_offset=0, device='cpu', task='FvT', model_file=''): # FvT == Four vs Threetag classification
@@ -255,7 +288,7 @@ class Model:
         sys.stdout.write(' '*SCREEN_WIDTH)
         sys.stdout.flush()
         print('\r',end='')
-        print(f'\nEpoch {self.epoch:>2} | Training  | Loss {self.train_result.loss:1.5}')
+        print(f'\nEpoch {self.epoch:>2} | Training | Loss {self.train_result.loss:1.5}')
 
     def valid_inference(self):
         self.inference(self.valid_result)
@@ -339,17 +372,12 @@ class Model:
 
 
 
-
-
-
-
-
 class Model_AE:
-    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'decode', model_file = ''):
+    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = ''):
         self.task = task
         self.device = device
         self.train_valid_offset = train_valid_offset
-        self.network = networks.CNN_AE(8, 16) # keep for now 4 features for each of the output jet
+        self.network = networks.Basic_CNN_AE(8, 12) # keep for now 4 features for each of the output jet
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -395,23 +423,25 @@ class Model_AE:
         self.network.eval()
 
         # nb, event jets vector, label, weight, region, event number
-        for i, (j, w, R, e) in enumerate(result.infer_loader):
-            rec_j = self.network(j)
+        for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
+            rec_j, rec_j_scaled, j_scaled = self.network(j)
+            
 
-            result.infer_batch_AE(j, rec_j)
-
-            percent = float(i+1)*100/len(result.infer_loader)
-            sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
+            result.infer_batch_AE(j_scaled[:, 0:3, :], rec_j_scaled)
+            
+            percent = float(batch_number+1)*100/len(result.infer_loader)
+            sys.stdout.write(f'\n\rEvaluating {percent:3.0f}%')
             sys.stdout.flush()
 
         result.infer_done_AE()
+
 
     def train_inference(self):
         self.inference(self.train_result)
         sys.stdout.write(' '*SCREEN_WIDTH)
         sys.stdout.flush()
         print('\r',end='')
-        print(f'\nEpoch {self.epoch:>2} | Training | Loss {self.train_result.loss:1.5}')
+        print(f'\n\nEpoch {self.epoch:>2} | Training | Loss {self.train_result.loss:1.5}')
 
     def valid_inference(self):
         self.inference(self.valid_result)
@@ -423,18 +453,31 @@ class Model_AE:
     def train(self, result=None):
         if result is None: result = self.train_result
         self.network.train() # inherited from nn.Module()
+        
 
-        for i, (j, w, R, e) in enumerate(result.train_loader):
+        for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
-            rec_j = self.network(j) # forward pass
-            result.train_batch_AE(j, rec_j)
+            rec_j, rec_j_scaled, j_scaled = self.network(j) # forward pass
+            
 
-            percent = float(i+1)*100/len(result.train_loader)
+            
+            if batch_number == 0:
+                print("\nBatch:", batch_number)
+                print("j:", j[0])
+                print("rec_j:", rec_j[0])
+                print("j_scaled:", j_scaled[0])
+                print("rec_j_scaled:", rec_j_scaled[0])
+
+            result.train_batch_AE(j_scaled[:, 0:3, :], rec_j_scaled, w)
+
+            percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
             sys.stdout.flush()
 
             self.optimizer.step()
-    
+
+
+
     def increment_train_loader(self, new_batch_size = None):
         current_batch_size = self.train_result.train_loader.batch_size
         if new_batch_size is None: new_batch_size = current_batch_size * bs_scale
@@ -444,13 +487,25 @@ class Model_AE:
         self.train_result.train_loader = DataLoader(dataset=self.train_result.dataset, batch_size=new_batch_size, shuffle=True, num_workers=num_workers, pin_memory=True, drop_last=True)
         self.bs_change.append(self.epoch)
 
-    def run_epoch(self):
+    def run_epoch(self, plot_res):
         self.epoch += 1
+        if plot_res:
+            for i, (j_, w_, R_, e_) in enumerate(self.valid_result.infer_loader):
+                rec_j_, rec_j_scaled_, j_scaled_ = self.network(j_)
+            
+            plots.plot_training_residuals(j_[:, 0:3, :], rec_j_, epoch = self.epoch) # plot training residuals for pt, eta, phi
+            
         self.train()
         self.train_inference()
-        self.valid_inference()
-        self.scheduler.step()
         
+        self.valid_inference()
+        
+        
+
+        self.scheduler.step()
+
+        
+
         if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
             gb_decay = 4 # 2 if self.epoch in bs_mile
             print(f'set_ghost_batches({self.network.n_ghost_batches//gb_decay})')
@@ -462,7 +517,7 @@ class Model_AE:
                 self.lr_current *= lr_scale
                 self.lr_change.append(self.epoch)
 
-    def run_training(self):
+    def run_training(self, plot_res = False):
         self.network.set_mean_std(self.train_result.dataset.tensors[0])
         
         #sys.stdout.write('\nMean and standard deviations set\n')
@@ -476,7 +531,7 @@ class Model_AE:
         #sys.stdout.write('\nvalid_inference() done\n')
 
         for _ in range(num_epochs):
-            self.run_epoch()
+            self.run_epoch(plot_res = plot_res)
         self.save_model()
     
     def save_model(self):
@@ -492,10 +547,6 @@ class Model_AE:
 
 
 
-
-
-
-
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -507,13 +558,13 @@ if __name__ == '__main__':
 
 
  
-    custom_selection = 'event.preselection & event.SR'
+    custom_selection = 'event.preselection'
 
     if args.train:
         if args.task:
             task = args.task
         else:
-            sys.exit("Task not specified. Use --FvT or --SvB. Exiting...")
+            sys.exit("Task not specified. Use FvT, SvB or dec. Exiting...")
 
         classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
 
@@ -576,7 +627,7 @@ if __name__ == '__main__':
 
 
 
-        if task == 'decode':
+        if task == 'dec':
             coffea_file = sorted(glob('data/HH4b_picoAOD*.coffea'))
 
             event = load(coffea_file, selection = custom_selection)
@@ -587,7 +638,7 @@ if __name__ == '__main__':
 
             t=Model_AE(**model_args)
             t.make_loaders(event)
-            t.run_training()
+            t.run_training(plot_res = True)
 
 
 
@@ -600,57 +651,108 @@ if __name__ == '__main__':
 
     if args.model:
 
+        
+
         task = args.model[args.model.find('_Basic') - 3 : args.model.find('_Basic')]
-        classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
+        
+        if task == 'FvT' or task == 'SvB':
+            classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
 
-        model_files = sorted(glob(args.model))
-        models = []
-        for model_file in model_files:
-            models.append(Model(model_file=model_file))
+            model_files = sorted(glob(args.model))
+            models = []
+            for model_file in model_files:
+                models.append(Model(model_file=model_file))
 
-        task = models[0].task
-        kfold = networks.K_Fold([model.network for model in models])
+            task = models[0].task
+            kfold = networks.K_Fold([model.network for model in models], task = task)
 
-        import uproot
-        import awkward as ak
+            import uproot
+            import awkward as ak
 
-        picoAODs = glob('data/*picoAOD.root')
-        for picoAOD in picoAODs:
-            output_file = picoAOD.replace('picoAOD', task)
-            print(f'Generate kfold output for {picoAOD} -> {output_file}')
-            coffea_files = sorted(glob(picoAOD.replace('.root','*.coffea')))
-            event = load(coffea_files)
-            j, e = coffea_to_tensor(event, kfold=True)
-            c_logits, q_logits = kfold(j, e)
-            c_score, q_score = F.softmax(c_logits, dim=1), F.softmax(q_logits, dim=1)
+            picoAODs = glob('data/*picoAOD.root')
+            for picoAOD in picoAODs:
+                output_file = picoAOD.replace('picoAOD', task)
+                print(f'Generate kfold output for {picoAOD} -> {output_file}')
+                coffea_files = sorted(glob(picoAOD.replace('.root','*.coffea')))
+                event = load(coffea_files)
+                j, e = coffea_to_tensor(event, kfold=True)
+                c_logits, q_logits = kfold(j, e)
+                c_score, q_score = F.softmax(c_logits, dim=1), F.softmax(q_logits, dim=1)
 
-            with uproot.recreate(output_file) as output:
-                kfold_dict = {}
+                with uproot.recreate(output_file) as output:
+                    kfold_dict = {}
 
-                
+                    
 
-                kfold_dict['q_0123'] = q_score[:,0].numpy()
-                kfold_dict['q_0213'] = q_score[:,1].numpy()
-                kfold_dict['q_0312'] = q_score[:,2].numpy()
-                
-                # If I want to keep for now the original branches of the coffea files
-                '''for branch in event.fields:
-                    kfold_dict[f'{branch}'] = event.__getattr__(branch)'''
-                # the upper loop gives problems so I'll just stick to the most relevant ones
-                kfold_dict["preselection"] = np.array(event.preselection)
-                kfold_dict["SR"] = np.array(event.SR)
-                kfold_dict["SB"] = np.array(event.SB)
+                    kfold_dict['q_0123'] = q_score[:,0].numpy()
+                    kfold_dict['q_0213'] = q_score[:,1].numpy()
+                    kfold_dict['q_0312'] = q_score[:,2].numpy()
+                    
+                    # If I want to keep for now the original branches of the coffea files
+                    '''for branch in event.fields:
+                        kfold_dict[f'{branch}'] = event.__getattr__(branch)'''
+                    # the upper loop gives problems so I'll just stick to the most relevant ones
+                    kfold_dict["preselection"] = np.array(event.preselection)
+                    kfold_dict["SR"] = np.array(event.SR)
+                    kfold_dict["SB"] = np.array(event.SB)
 
 
-                for cl in classes:
-                    kfold_dict[cl.abbreviation] = c_score[:,cl.index].numpy()
-                
-                if task == 'FvT':
-                    kfold_dict['rw'] = kfold_dict['d4'] / kfold_dict['d3']                
-                if task == 'SvB':
-                    kfold_dict['ratio_SvB'] = kfold_dict['S'] / kfold_dict['BG']
-                
-                output['Events'] = {task: ak.zip(kfold_dict),
-                                    'event': event.event}
+                    for cl in classes:
+                        kfold_dict[cl.abbreviation] = c_score[:,cl.index].numpy()
+                    
+                    if task == 'FvT':
+                        kfold_dict['rw'] = kfold_dict['d4'] / kfold_dict['d3']                
+                    if task == 'SvB':
+                        kfold_dict['ratio_SvB'] = kfold_dict['S'] / kfold_dict['BG']
+                    
+                    output['Events'] = {task: ak.zip(kfold_dict),
+                                        'event': event.event}
 
+
+        elif task == 'dec':
             
+
+            model_files = sorted(glob(args.model))
+            models = []
+            for model_file in model_files:
+                models.append(Model_AE(model_file=model_file))
+
+            task = models[0].task
+            kfold = networks.K_Fold([model.network for model in models], task = task)
+
+            import uproot
+            import awkward as ak
+
+            picoAODs = glob('data/*picoAOD.root')
+            for picoAOD in picoAODs:
+                output_file = picoAOD.replace('picoAOD', task)
+                print(f'Generate kfold output for {picoAOD} -> {output_file}')
+                coffea_files = sorted(glob(picoAOD.replace('.root','*.coffea')))
+                event = load(coffea_files)
+                j, e = coffea_to_tensor(event, decode = True, kfold=True)
+                rec_j = kfold(j, e)
+                #rec_j_PtEtaPhiM = networks.PtEtaPhiM(rec_j) # use pt, eta, phi, m to save jets
+
+                with uproot.recreate(output_file) as output:
+                    kfold_dict = {}
+
+
+                    kfold_dict['nJet'] = rec_j.shape[2]
+                    for jet_nb in range(1, rec_j.shape[2] + 1):
+                        
+                        kfold_dict[f'Jet{jet_nb}_pt']   = rec_j[:, 0, jet_nb - 1].numpy()
+                        kfold_dict[f'Jet{jet_nb}_eta']  = rec_j[:, 1, jet_nb - 1].numpy()
+                        kfold_dict[f'Jet{jet_nb}_phi']  = rec_j[:, 2, jet_nb - 1].numpy()
+                        #kfold_dict[f'Jet{jet_nb}_mass'] = rec_j[:, 3, jet_nb - 1].numpy()
+
+                    kfold_dict["preselection"] = np.array(event.preselection)
+                    kfold_dict["SR"] = np.array(event.SR)
+                    kfold_dict["SB"] = np.array(event.SB)
+                    
+                    output['Events'] = {task: ak.zip(kfold_dict),
+                                        'event': event.event}
+
+        
+
+        else:
+            sys.exit("Task not specified. Use FvT, SvB or dec. Exiting...")
