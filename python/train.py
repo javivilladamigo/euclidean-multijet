@@ -1,3 +1,6 @@
+'''
+Imports and config
+'''
 from glob import glob
 import sys, os, argparse, re
 from copy import copy, deepcopy
@@ -18,6 +21,11 @@ torch.manual_seed(0)#make training results repeatable
 
 SCREEN_WIDTH = 100
 
+
+
+'''
+Labels for classifier
+'''
 class ClassInfo:
     def __init__(self, abbreviation='', name='', index=None, color=''):
         self.abbreviation = abbreviation
@@ -31,6 +39,16 @@ d3 = ClassInfo(abbreviation='d3', name='ThreeTag Data', color='orange')
 S = ClassInfo(abbreviation='S', name='Signal Data', color='red')
 BG = ClassInfo(abbreviation='BG', name='Background Data', color='orange')
 
+FvT_classes = [d4, d3]
+SvB_classes = [BG, S]
+for i, c in enumerate(FvT_classes): c.index = i
+for i, c in enumerate(SvB_classes): c.index = i
+
+
+
+'''
+Load coffea files and convert to tensor
+'''
 def load(cfiles, selection=''):
     event_list = []
     for cfile in cfiles:
@@ -40,13 +58,6 @@ def load(cfiles, selection=''):
             event = event[eval(selection)]
         event_list.append(event)
     return ak.concatenate(event_list)
-
-FvT_classes = [d4, d3]
-SvB_classes = [BG, S]
-
-for i, c in enumerate(FvT_classes): c.index = i
-
-for i, c in enumerate(SvB_classes): c.index = i
 
 # convert coffea objects in to pytorch tensors
 train_valid_modulus = 3
@@ -69,19 +80,24 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
     else:
         y = None
         dataset = TensorDataset(j, w, R, e)
-    
     return dataset
 
+
+
+'''
+Architecture hyperparameters
+'''
 num_epochs = 1
+
 lr_init  = 0.01
 lr_scale = 0.25
 bs_scale = 2
 #bs_milestones = [1,3,6,10]
-#lr_milestones = [15,16,17,18,19,20,21,22,23,24]
 bs_milestones = [10000000]
+#lr_milestones = [15,16,17,18,19,20,21,22,23,24]
 lr_milestones = [70, 80, 90]
 
-train_loss_tosave = []
+train_loss_tosave = [] # vectors to store loss during training for plotting afterwards (to be implemented)
 val_loss_tosave = []
 
 #train_batch_size = 2**10
@@ -89,27 +105,31 @@ train_batch_size = 2**8
 infer_batch_size = 2**14
 max_train_batch_size = train_batch_size*64
 
-num_workers=1
+num_workers=4
 
+
+
+'''
+Batch loaders class for inference and training
+'''
 class Loader_Result:
     def __init__(self, model, dataset, n_classes=2, train=False):
         self.dataset = dataset
         self.infer_loader = DataLoader(dataset=dataset, batch_size=infer_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
         self.train_loader = DataLoader(dataset=dataset, batch_size=train_batch_size, shuffle=False,  num_workers=num_workers, pin_memory=True, drop_last=True) if train else None
         self.n = len(dataset)
-        self.w = dataset.tensors[2]
+        self.w = dataset.tensors[1] if model.task == 'dec' else dataset.tensors[2]
         self.w_sum = self.w.sum()
         self.cross_entropy = torch.zeros(self.n)
-        self.decoding_loss = torch.zeros(self.n, 3, 4)
+        self.decoding_loss = torch.zeros(self.n, 3, 3)  # [batch_size, nb_of_features, effective_nb_of_jets]
+                                                        # nb_of_features is the number of features reconstructed (i.e. how many features from [pt, eta, phi, mass])
+                                                        # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
         self.n_done = 0
         self.loaded_die_loss = model.loaded_die_loss if hasattr(model, 'loaded_die_loss') else None
         self.loss_estimate = 1.0
         self.history = {'loss': []}
         self.task = model.task
         self.train = train
-
-        self.res = torch.zeros(self.n, 3, 4)
-        self.true_value = torch.zeros(self.n, 3, 4)
 
     def eval(self):
         self.n_done = 0
@@ -125,23 +145,16 @@ class Loader_Result:
         #torch.save(cross_entropy_batch, f"python/cross_entropy_batch_{task}.pkl")
         #sys.stdout.write(f'\nExiting...\n'); sys.exit()
         self.cross_entropy[self.n_done:self.n_done+n_batch] = cross_entropy_batch
-
         self.n_done += n_batch
 
     def infer_batch_AE(self, j, rec_j): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
 
-        
         mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        
 
         assert mse_loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and mse_loss_batch shapes mismatch"
 
         self.decoding_loss[self.n_done : self.n_done + n_batch] = mse_loss_batch
-
-        self.res[self.n_done : self.n_done + n_batch] = rec_j - j
-        self.true_value[self.n_done : self.n_done + n_batch] = j
-
         self.n_done += n_batch
 
     def infer_done(self):
@@ -174,27 +187,19 @@ class Loader_Result:
         self.loss_estimate = self.loss_estimate*0.98 + loss_batch.item()*(1-0.98) # running average with 0.98 exponential decay rate
 
     def train_batch_AE(self, j, rec_j, w): # expecting same sized j and rec_j
-        w_sum = w.sum()
 
         mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none')
 
-        ###### here im using self.w instead of passing w as an argument as in train_batch() --> possibly subject to change
-        #print(w.shape,mse_loss_batch.shape)
-        loss_batch = ((w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w_sum) # multiply weight for all the jet features and recover the original shape of the features 
+        loss_batch = ((w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum()) # multiply weight for all the jet features and recover the original shape of the features 
         
         loss_batch.backward()
-        self.loss_estimate = self.loss_estimate * 0. + loss_batch.item() * 1. # running average with 0.98 exponential decay rate
+        self.loss_estimate = self.loss_estimate * 0. + loss_batch.item() * 1.
 
 
 
-
-
-
-
-
-
-
-
+'''
+Model used for classification
+'''
 class Model:
     def __init__(self, train_valid_offset=0, device='cpu', task='FvT', model_file=''): # FvT == Four vs Threetag classification
         self.task = task
@@ -368,16 +373,16 @@ class Model:
 
 
 
-
-
-
-
+'''
+Model used for autoencoding
+'''
 class Model_AE:
-    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = ''):
+    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = '', construct_rel_features = False):
         self.task = task
         self.device = device
         self.train_valid_offset = train_valid_offset
-        self.network = networks.Basic_CNN_AE(8, 12) # keep for now 4 features for each of the output jet
+        self.construct_rel_features = construct_rel_features
+        self.network = networks.Basic_CNN_AE(8, 12, construct_rel_features = self.construct_rel_features) # keep for now 4 features for each of the output jet
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -422,15 +427,14 @@ class Model_AE:
         '''
         self.network.eval()
 
-        # nb, event jets vector, label, weight, region, event number
+        # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            rec_j, rec_j_scaled, j_scaled = self.network(j)
+            rec_j, rec_j_scaled, j_scaled, rel_rec_j, rel_rec_j_scaled, rel_j, rel_j_scaled = self.network(j)
             
-
-            result.infer_batch_AE(j_scaled[:, 0:3, :], rec_j_scaled)
+            result.infer_batch_AE(rel_j_scaled[:, 0:3, :], rel_rec_j_scaled)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
-            sys.stdout.write(f'\n\rEvaluating {percent:3.0f}%')
+            sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
             sys.stdout.flush()
 
         result.infer_done_AE()
@@ -453,30 +457,19 @@ class Model_AE:
     def train(self, result=None):
         if result is None: result = self.train_result
         self.network.train() # inherited from nn.Module()
-        
 
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
-            rec_j, rec_j_scaled, j_scaled = self.network(j) # forward pass
-            
 
+            rec_j, rec_j_scaled, j_scaled, rel_rec_j, rel_rec_j_scaled, rel_j, rel_j_scaled = self.network(j) # forward pass
             
-            if batch_number == 0:
-                print("\nBatch:", batch_number)
-                print("j:", j[0])
-                print("rec_j:", rec_j[0])
-                print("j_scaled:", j_scaled[0])
-                print("rec_j_scaled:", rec_j_scaled[0])
-
-            result.train_batch_AE(j_scaled[:, 0:3, :], rec_j_scaled, w)
+            result.train_batch_AE(rel_j_scaled[:, 0:3, :], rel_rec_j_scaled, w)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
             sys.stdout.flush()
 
             self.optimizer.step()
-
-
 
     def increment_train_loader(self, new_batch_size = None):
         current_batch_size = self.train_result.train_loader.batch_size
@@ -489,21 +482,20 @@ class Model_AE:
 
     def run_epoch(self, plot_res):
         self.epoch += 1
-        if plot_res:
-            for i, (j_, w_, R_, e_) in enumerate(self.valid_result.infer_loader):
-                rec_j_, rec_j_scaled_, j_scaled_ = self.network(j_)
-            
-            plots.plot_training_residuals(j_[:, 0:3, :], rec_j_, epoch = self.epoch) # plot training residuals for pt, eta, phi
-            
         self.train()
-        self.train_inference()
-        
+        self.train_inference()        
         self.valid_inference()
-        
-        
-
         self.scheduler.step()
 
+        if plot_res:
+            total_rel_j_ = torch.Tensor(())
+            total_rel_rec_j_ = torch.Tensor(())
+            for i, (j_, w_, R_, e_) in enumerate(self.valid_result.infer_loader):
+                rec_j_, rec_j_scaled_, j_scaled_, rel_rec_j_, rel_rec_j_scaled_, rel_j_, rel_j_scaled_ = self.network(j_)
+                total_rel_j_ = torch.cat((total_rel_j_, rel_j_[:, 0:3, :]), 0)
+                total_rel_rec_j_ = torch.cat((total_rel_rec_j_, rel_rec_j_), 0)
+
+            plots.plot_training_residuals(total_rel_j_, total_rel_rec_j_, offset = self.train_valid_offset, epoch = self.epoch) # plot training residuals for pt, eta, phi
         
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
@@ -547,7 +539,9 @@ class Model_AE:
 
 
 
-    
+'''
+Arguments for execution
+'''
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--train', default=False, action='store_true', help='Run model training')
@@ -556,105 +550,110 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--model', default='', type=str, help='Load these models (* wildcard for offsets)')
     args = parser.parse_args()
 
+    
+    custom_selection = 'event.preselection' # region on which you want to train
 
- 
-    custom_selection = 'event.preselection'
 
+
+    '''
+    Training
+    '''
     if args.train:
         if args.task:
             task = args.task
         else:
+            # demand the specification of --task if --train to avoid conflicts
             sys.exit("Task not specified. Use FvT, SvB or dec. Exiting...")
 
         classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
 
-        '''
-        The task is FourTag vs. ThreeTag
-        '''
-        #Load data
+        # task is fourTag vs. threeTag classification
         if task == 'FvT':
             coffea_4b = sorted(glob('data/fourTag_picoAOD*.coffea'))
             coffea_3b = sorted(glob('data/threeTag_picoAOD*.coffea'))
 
+            # Load data
             event_3b = load(coffea_3b, selection=custom_selection)
             event_4b = load(coffea_4b, selection=custom_selection)
 
+            # Generate labels
             event_3b['d3'] = True
             event_3b['d4'] = False
-
             event_4b['d3'] = False
             event_4b['d4'] = True
 
+            # Form events with threeTag + fourTag
             event = ak.concatenate([event_3b, event_4b])
 
+            # Assign labels to each particular event
             event['class'] = d4.index*event.d4 + d3.index*event.d3 # for binary classification this seems dumb, makes sense when you have multi-class classification
 
-            model_args = {'task': task,
-                      'train_valid_offset': args.offset}
-        
+            # Load model and run training
+            model_args = {  'task': task,
+                            'train_valid_offset': args.offset}
             t=Model(**model_args) # Four vs Threetag classification
             t.make_loaders(event)
             t.run_training()
 
 
-        '''
-        The task is Signal vs. Background classification
-        '''
-        #Load data
-        if task == 'SvB':
-            coffea_signal = sorted(glob('data/HH4b_picoAOD*.coffea'))
-            coffea_background = sorted(glob('data/threeTag_picoAOD*.coffea'))
 
-            event_signal = load(coffea_signal, selection=custom_selection) # am I suppose to use the SR here or just relax the criteria?
+        # task is Signal vs. Background classification
+        if task == 'SvB': 
+            coffea_signal = sorted(glob('data/HH4b_picoAOD*.coffea'))
+            coffea_background = sorted(glob('data/threeTag_picoAOD*.coffea')) # file used for background
+
+            # Load data
+            event_signal = load(coffea_signal, selection=custom_selection)
             event_background = load(coffea_background, selection=custom_selection)
 
+            # Generate labels
             event_signal['S'] = True
             event_signal['BG'] = False
-
             event_background['S'] = False
             event_background['BG'] = True
 
+            # Form events with signal + background
             event = ak.concatenate([event_signal, event_background])
 
+            # Assign labels to each particular event
             event['class'] = S.index*event.S + BG.index*event.BG # for binary classification this seems dumb, makes sense when you have multi-class classification
 
-            model_args = {'task': task,
-                      'train_valid_offset': args.offset}
-        
+            # Load model and run training
+            model_args = {  'task': task,
+                            'train_valid_offset': args.offset}
             t=Model(**model_args)
             t.make_loaders(event)
             t.run_training()
 
 
-
+        # task is autoencoding
         if task == 'dec':
-            coffea_file = sorted(glob('data/HH4b_picoAOD*.coffea'))
+            coffea_file = sorted(glob('data/HH4b_picoAOD*.coffea')) # file used for autoencoding
 
+            # Load data
             event = load(coffea_file, selection = custom_selection)
 
-            model_args = {'task': task,
-                      'train_valid_offset': args.offset}
-        
-
-            t=Model_AE(**model_args)
+            # Load model and run training
+            model_args = {  'task': task,
+                            'train_valid_offset': args.offset}
+            t=Model_AE(**model_args, construct_rel_features=True)
             t.make_loaders(event)
             t.run_training(plot_res = True)
 
-
-
-        
-
-
-
-
-
-
+            
+            
+    
+    
+    
+    '''
+    Pre-compute friend TTrees with the validation results after training
+    '''
     if args.model:
-
         
-
+        # task is specified as the three letters before "_Basic" in model filename
         task = args.model[args.model.find('_Basic') - 3 : args.model.find('_Basic')]
         
+        # Task is classification (either FvT or SvB)
         if task == 'FvT' or task == 'SvB':
             classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
 
@@ -682,8 +681,6 @@ if __name__ == '__main__':
                 with uproot.recreate(output_file) as output:
                     kfold_dict = {}
 
-                    
-
                     kfold_dict['q_0123'] = q_score[:,0].numpy()
                     kfold_dict['q_0213'] = q_score[:,1].numpy()
                     kfold_dict['q_0312'] = q_score[:,2].numpy()
@@ -708,14 +705,12 @@ if __name__ == '__main__':
                     output['Events'] = {task: ak.zip(kfold_dict),
                                         'event': event.event}
 
-
+        # task is autoencoding
         elif task == 'dec':
-            
-
             model_files = sorted(glob(args.model))
             models = []
             for model_file in model_files:
-                models.append(Model_AE(model_file=model_file))
+                models.append(Model_AE(model_file=model_file, construct_rel_features=True))
 
             task = models[0].task
             kfold = networks.K_Fold([model.network for model in models], task = task)
@@ -731,7 +726,6 @@ if __name__ == '__main__':
                 event = load(coffea_files)
                 j, e = coffea_to_tensor(event, decode = True, kfold=True)
                 rec_j = kfold(j, e)
-                #rec_j_PtEtaPhiM = networks.PtEtaPhiM(rec_j) # use pt, eta, phi, m to save jets
 
                 with uproot.recreate(output_file) as output:
                     kfold_dict = {}
@@ -751,8 +745,5 @@ if __name__ == '__main__':
                     
                     output['Events'] = {task: ak.zip(kfold_dict),
                                         'event': event.event}
-
-        
-
         else:
-            sys.exit("Task not specified. Use FvT, SvB or dec. Exiting...")
+            sys.exit("Task not found in model filename. Write models/(dec, SvB, FvT)_Basic[...]")

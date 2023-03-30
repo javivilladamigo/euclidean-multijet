@@ -104,7 +104,7 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
     plt.close()
 
 
-def plot_training_residuals(true_val, reco_val, epoch): # expects [batch, (3) features, (4) jets] shaped tensors
+def plot_training_residuals(true_val, reco_val, offset, epoch): # expects [batch, (3) features, (4) jets] shaped tensors
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
@@ -116,40 +116,45 @@ def plot_training_residuals(true_val, reco_val, epoch): # expects [batch, (3) fe
     true_val = true_val.detach()
     reco_val = reco_val.detach()
     res = reco_val - true_val
+    res_norm = res / true_val
 
     cmap = cm.get_cmap("viridis")
     #cc.cm["CET_L17"].copy()
     
     fig, ax = plt.subplots(1, 3, figsize = (15, 5))
-    cbar_ax = fig.add_axes([0.92, 0.1, 0.01, 0.8])
+    cbar_ax = fig.add_axes([0.96, 0.1, 0.01, 0.8])
     vmax_mob = 0
-    for i, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi\ ({\\rm rad})$"]):
-        bounds = [(true_val[:, i, :].min(), true_val[:, i, :].max()), (reco_val[:, i, :].min(), reco_val[:, i, :].max())]
+    for i, feature in enumerate(["$|S_{T}|\ ({\\rm GeV)}$", "$|\Delta\eta|$", "$|\Delta\phi|\ ({\\rm rad})$"]):
+        
         '''
         Implementation of fast histogram is weird: histogram2d produces a 2d plot that makes NO sense in the confrontation of y vs x (the correlation is lost somehow)
-        
+        bounds = [(true_val[:, i, :].min(), true_val[:, i, :].max()), (reco_val[:, i, :].min(), reco_val[:, i, :].max())]
         h = histogram2d(true_val[:, i, :], reco_val[:, i, :], range=bounds, bins=100) # get the histogram of the i-th feature for all the events and all the jets
         im = ax[i].imshow(h.T, cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = h.max()), extent= [*bounds[0], *bounds[1]], aspect = 'auto')
         '''
         
-        h2d, xbins, ybins, im = ax[i].hist2d(true_val[:, i, :].flatten().numpy(), reco_val[:, i, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 500), bins = (64, 64))
+        h2d, xbins, ybins, im = ax[i].hist2d(true_val[:, i, :].flatten().numpy(), res[:, i, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
 
-        ax[i].tick_params(which = 'major', axis = 'both', direction='in', length = 6, labelsize = 10)
+        ax[i].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
         ax[i].minorticks_on()
         ax[i].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
 
         ax[i].set_xlabel(f'True {feature}')
-        ax[i].set_ylabel(f'Reco {feature}')
+        ax[i].set_ylabel(f'Reco - true {feature}')
 
+        #ax[i].plot(xbins, xbins, lw = 2., c = 'grey', ls = '-.')
+        ax[i].axhline(y = 0, lw = 2., c = 'grey', ls = '-.')
+        
         if h2d.max() > vmax_mob:
             im_vmax = im
             vmax_mob = h2d.max()
-    fig.show
     fig.colorbar(im_vmax, cax=cbar_ax)
-    fig.subplots_adjust(top = 0.9, bottom=0.1, right=0.9)
-    path = "plots/autoencoder/residuals/"
+    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3)
+    fig.suptitle(f'Epoch {epoch}')
+    path = "plots/autoencoder/reco_vs_true/relative_features/"
     mkpath(path)
-    fig.savefig(f'{path}residuals_epoch_{epoch:02d}.pdf')
+    fig.savefig(f'{path}residuals_offset_{offset}_epoch_{epoch:02d}.pdf')
+    plt.close()
 
 
 if __name__ == '__main__':

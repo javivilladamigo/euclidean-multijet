@@ -84,7 +84,8 @@ class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has w
         pixel_groups = pixels//self.stride
 
         if self.training and self.n_ghost_batches!=0:
-            self.ghost_batch_size = batch_size // self.n_ghost_batches.abs()
+            # this has been changed from self.ghost_batch_size = batch_size // self.n_ghost_batches.abs()
+            self.ghost_batch_size = torch.div(batch_size, self.n_ghost_batches.abs(), rounding_mode = 'trunc')
 
             #
             # Apply batch normalization with Ghost Batch statistics
@@ -207,6 +208,11 @@ def addFourVectors(v1, v2, v1PxPyPzE=None, v2PxPyPzE=None): # output added four-
 
     return v12, v12PxPyPzE
 
+def calcDeltaPhi(v1, v2): #expects eta, phi representation
+    dPhi12 = (v1[:,2:3]-v2[:,2:3])%math.tau
+    dPhi21 = (v2[:,2:3]-v1[:,2:3])%math.tau
+    dPhi = torch.min(dPhi12,dPhi21)
+    return dPhi
 
 #
 # Some different non-linear units
@@ -242,13 +248,9 @@ class Input_Embed(nn.Module):
         self.quadjet_embed = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='quadjet embedder', device = self.device) # phi is removed
         self.quadjet_conv  = Ghost_Batch_Norm(self.d, conv=True, name='quadjet convolution', device = self.device)
 
-        self.register_buffer('tau', torch.tensor(math.tau, dtype=torch.float))
+        #self.register_buffer('tau', torch.tensor(math.tau, dtype=torch.float))
 
-    def calcDeltaPhi(self, v1, v2): #expects eta, phi representation
-        dPhi12 = (v1[:,2:3]-v2[:,2:3])%self.tau
-        dPhi21 = (v2[:,2:3]-v1[:,2:3])%self.tau
-        dPhi = torch.min(dPhi12,dPhi21)
-        return dPhi
+    
         
     def data_prep(self, j):
         j = j.clone()# prevent overwritting data from dataloader when doing operations directly from RAM rather than copying to VRAM
@@ -275,11 +277,11 @@ class Input_Embed(nn.Module):
         j = torch.cat([j, j[:,:,(0,2,1,3)], j[:,:,(0,3,1,2)]],2)
 
         # only keep relative angular information so that learned features are invariant under global phi rotations and eta/phi flips
-        j[:,2:3,(0,2,4,6,8,10)] = self.calcDeltaPhi(d, j[:,:,(0,2,4,6,8,10)]) # replace jet phi with deltaPhi between dijet and jet
-        j[:,2:3,(1,3,5,7,9,11)] = self.calcDeltaPhi(d, j[:,:,(1,3,5,7,9,11)])
+        j[:,2:3,(0,2,4,6,8,10)] = calcDeltaPhi(d, j[:,:,(0,2,4,6,8,10)]) # replace jet phi with deltaPhi between dijet and jet
+        j[:,2:3,(1,3,5,7,9,11)] = calcDeltaPhi(d, j[:,:,(1,3,5,7,9,11)])
 
-        d[:,2:3,(0,2,4)] = self.calcDeltaPhi(q, d[:,:,(0,2,4)])
-        d[:,2:3,(1,3,4)] = self.calcDeltaPhi(q, d[:,:,(1,3,5)])
+        d[:,2:3,(0,2,4)] = calcDeltaPhi(q, d[:,:,(0,2,4)])
+        d[:,2:3,(1,3,4)] = calcDeltaPhi(q, d[:,:,(1,3,5)])
 
         q = torch.cat( (q[:,:2,:],q[:,3:,:]) , 1 ) # remove phi from quadjet features
 
@@ -368,12 +370,14 @@ class Basic_CNN(nn.Module):
 
 
 class Basic_CNN_AE(nn.Module):
-    def __init__(self, dimension, out_features = 12, device = 'cpu'):
+    def __init__(self, dimension, out_features = 12, device = 'cpu', construct_rel_features = False):
         super(Basic_CNN_AE, self).__init__()
         self.device = device
         self.d = dimension
         self.out_features = out_features
         self.n_ghost_batches = 64
+        self.construct_rel_features = construct_rel_features
+
 
         self.name = f'Basic_CNN_AE_{self.d}'
 
@@ -416,13 +420,24 @@ class Basic_CNN_AE(nn.Module):
     
     def forward(self, j):
         j_scaled = j.clone()
+
+        if self.construct_rel_features:
+            rel_j = torch.zeros((j.shape[0], 3, 3)) # three relative features for 4 jets
+            rel_j_scaled = torch.zeros((j.shape[0], 3, 3)) # the normalized feature vector for loss computation
+            
+            rel_j[:, 0, :] = j[:, 0, (0,1,2)] + j[:, 0, (1,2,3)] # construct scalar pt of dijets
+            rel_j[:, 1, :] = (j[:, 1, (0,1,2)] - j[:, 1, (1,2,3)]).abs() # construct differences of eta (12, 23, 34)
+            rel_j[:, 2, (0,1,2)] = calcDeltaPhi(j[:, 2, (0,1,2)], j[:, 2, (1,2,3)]) # eliminate redundances -> dPhi in [pi, 2pi] is passed to the range [0, pi] (equivalent to changing the order of the subtraction inside the absolute value)
+
+            rel_batch_mean = rel_j.mean(dim = (0, 2))
+            rel_batch_std = rel_j.std(dim = (0, 2))
+
         batch_mean = j.mean(dim = (0, 2))
         batch_std = j.std(dim = (0, 2))
 
             
 
         j, d, q = self.input_embed(j)
-
         d = d + NonLU(self.jets_to_dijets(j))
         q = q + NonLU(self.dijets_to_quadjets(d))
 
@@ -440,13 +455,30 @@ class Basic_CNN_AE(nn.Module):
         rec_j = rec_j.view(-1, 3, 4) # convert to 3x4 events (3 features x 4 jets)
 
         rec_j_scaled = rec_j.clone()
+        rel_rec_j_scaled = rel_j.clone()
+
+        rel_rec_j = torch.zeros((rec_j.shape[0], 3, 3))
+        rel_rec_j[:, 0, :] = rec_j[:, 0, (0,1,2)] + rec_j[:, 0, (1,2,3)] # construct scalar pt of dijets
+        rel_rec_j[:, 1, :] = (rec_j[:, 1, (0,1,2)] - rec_j[:, 1, (1,2,3)]).abs() # construct differences of eta and phi (12, 23, 34)
+        rel_rec_j[:, 2, (0,1,2)] = calcDeltaPhi(rec_j[:, 2, (0,1,2)], rec_j[:,2,(1,2,3)]) # eliminate redundances -> dPhi in [pi, 2pi] is passed to the range [0, pi] (equivalent to changing the order of the subtraction inside the absolute value)
+
         for i in range(len(rec_j[0, :, 0])):
             # obtained a normalized j for the computation of the loss
-            #print(i,"-th mean,std:", batch_mean[i], batch_std[i])
+            
             j_scaled[:, i, :] = (j_scaled[:, i, :] - batch_mean[i]) / batch_std[i]
             rec_j_scaled[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
+
+            if self.construct_rel_features:
+                rel_j_scaled[:, i, :] = (rel_j[:, i, :] - rel_batch_mean[i]) / rel_batch_std[i]
+                rel_rec_j_scaled[:, i, :] = (rel_rec_j[:, i, :] - rel_batch_mean[i]) / rel_batch_std[i]
+                
         
-        return rec_j, rec_j_scaled, j_scaled # output the rec_j, also the scaled variables for loss computation
+        
+        
+        if self.construct_rel_features:
+            return rec_j, rec_j_scaled, j_scaled, rel_rec_j, rel_rec_j_scaled, rel_j, rel_j_scaled # output the rec_j, also the scaled variables for loss computation
+        else:
+            return rec_j, rec_j_scaled, j_scaled, None, None, None # output the rec_j, also the scaled variables for loss computation
 
 
 
@@ -481,8 +513,11 @@ class K_Fold(nn.Module):
 
             for offset, model in enumerate(self.models):
                 #mask = (e==offset)
-                rec_j, rec_j_scaled, j_scaled = model(j)
-            
+                if self.models[0].construct_rel_features: # check if the models were constructed with relative features
+                    rec_j, rec_j_scaled, j_scaled, rel_rec_j, rel_rec_j_scaled, rel_j_scaled = model(j)
+                else:
+                    rec_j, rec_j_scaled, j_scaled = model(j)
+
             return rec_j
 
 
