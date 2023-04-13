@@ -422,12 +422,12 @@ class Basic_CNN_AE(nn.Module):
         j_scaled = j.clone()
 
         if self.construct_rel_features:
-            rel_j = torch.zeros((j.shape[0], 3, 3)) # three relative features for 4 jets
-            rel_j_scaled = torch.zeros((j.shape[0], 3, 3)) # the normalized feature vector for loss computation
+            rel_j = torch.zeros((j.shape[0], 3, 4)) # three relative features for 4 jets
+            rel_j_scaled = torch.zeros((j.shape[0], 3, 4)) # the normalized feature vector for loss computation
             
-            rel_j[:, 0, :] = j[:, 0, (0,1,2)] + j[:, 0, (1,2,3)] # construct scalar pt of dijets
-            rel_j[:, 1, :] = (j[:, 1, (0,1,2)] - j[:, 1, (1,2,3)]).abs() # construct differences of eta (12, 23, 34)
-            rel_j[:, 2, (0,1,2)] = calcDeltaPhi(j[:, 2, (0,1,2)], j[:, 2, (1,2,3)]) # eliminate redundances -> dPhi in [pi, 2pi] is passed to the range [0, pi] (equivalent to changing the order of the subtraction inside the absolute value)
+            rel_j[:, 0, :] = j[:, 0, (0,1,2,3)] + j[:, 0, (1,2,3,0)] # construct scalar pt of dijets
+            rel_j[:, 1, :] = (j[:, 1, (0,1,2,3)] - j[:, 1, (1,2,3,0)]).abs() # construct differences of eta (12, 23, 34)
+            rel_j[:, 2, (0,1,2,3)] = calcDeltaPhi(j[:, 2, (0,1,2,3)], j[:, 2, (1,2,3,0)]) # eliminate redundances -> dPhi in [pi, 2pi] is passed to the range [0, pi] (equivalent to changing the order of the subtraction inside the absolute value)
 
             rel_batch_mean = rel_j.mean(dim = (0, 2))
             rel_batch_std = rel_j.std(dim = (0, 2))
@@ -436,16 +436,30 @@ class Basic_CNN_AE(nn.Module):
         batch_std = j.std(dim = (0, 2))
 
             
+        # j.shape = [batch_size, 4, 4]
 
         j, d, q = self.input_embed(j)
+
+        # j.shape = [batch_size, 8, 12]
+        # d.shape = [batch_size, 8, 6]
+        # q.shape = [batch_size, 8, 3]
+
         d = d + NonLU(self.jets_to_dijets(j))
         q = q + NonLU(self.dijets_to_quadjets(d))
+
+        # d.shape = [batch_size, 8, 6]
+        # q.shape = [batch_size, 8, 3]
 
         #compute a score for each event quadjet
         q_logits = self.select_q(q)
 
+        # q_logits.shape = [batch_size, 1, 3]
+
         #convert the score to a 'probability' with softmax. This way the classifier is learning which pairing is most relevant to the classification task at hand.
         q_score = F.softmax(q_logits, dim=-1)
+
+        # q_score.shape = [batch_size, 1, 3]
+
         q_logits = q_logits.view(-1, 3)
 
         #add together the quadjets with their corresponding probability weight
@@ -457,10 +471,10 @@ class Basic_CNN_AE(nn.Module):
         rec_j_scaled = rec_j.clone()
         rel_rec_j_scaled = rel_j.clone()
 
-        rel_rec_j = torch.zeros((rec_j.shape[0], 3, 3))
-        rel_rec_j[:, 0, :] = rec_j[:, 0, (0,1,2)] + rec_j[:, 0, (1,2,3)] # construct scalar pt of dijets
-        rel_rec_j[:, 1, :] = (rec_j[:, 1, (0,1,2)] - rec_j[:, 1, (1,2,3)]).abs() # construct differences of eta and phi (12, 23, 34)
-        rel_rec_j[:, 2, (0,1,2)] = calcDeltaPhi(rec_j[:, 2, (0,1,2)], rec_j[:,2,(1,2,3)]) # eliminate redundances -> dPhi in [pi, 2pi] is passed to the range [0, pi] (equivalent to changing the order of the subtraction inside the absolute value)
+        rel_rec_j = torch.zeros((rec_j.shape[0], 3, 4))
+        rel_rec_j[:, 0, :] = rec_j[:, 0, (0,1,2,3)] + rec_j[:, 0, (1,2,3,0)] # construct scalar pt of dijets
+        rel_rec_j[:, 1, :] = (rec_j[:, 1, (0,1,2,3)] - rec_j[:, 1, (1,2,3,0)]).abs() # construct differences of eta and phi (12, 23, 34)
+        rel_rec_j[:, 2, (0,1,2,3)] = calcDeltaPhi(rec_j[:, 2, (0,1,2,3)], rec_j[:,2,(1,2,3,0)]) # eliminate redundances -> dPhi in [pi, 2pi] is passed to the range [0, pi] (equivalent to changing the order of the subtraction inside the absolute value)
 
         for i in range(len(rec_j[0, :, 0])):
             # obtained a normalized j for the computation of the loss

@@ -118,6 +118,7 @@ def plot_training_residuals(true_val, reco_val, offset, epoch): # expects [batch
     res = reco_val - true_val
     res_norm = res / true_val
 
+    #cmap = cm.get_cmap("bwr")
     cmap = cm.get_cmap("viridis")
     #cc.cm["CET_L17"].copy()
     
