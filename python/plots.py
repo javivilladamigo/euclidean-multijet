@@ -78,10 +78,10 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
     
     h.plot2d_full(
         main_cmap="coolwarm",
-        top_ls="--",
+        top_ls="-", # before was "--"
         top_color="orange",
         top_lw=2,
-        side_ls=":",
+        side_ls="-", # before was ":"
         side_lw=2,
         side_color="steelblue",
     )
@@ -109,8 +109,6 @@ def plot_training_residuals(true_val, reco_val, offset, epoch): # expects [batch
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
-    import numpy as np
-    import torch
     #from fast_histogram import histogram2d
 
     true_val = true_val.detach()
@@ -152,7 +150,7 @@ def plot_training_residuals(true_val, reco_val, offset, epoch): # expects [batch
     fig.colorbar(im_vmax, cax=cbar_ax)
     fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3)
     fig.suptitle(f'Epoch {epoch}')
-    path = "plots/autoencoder/reco_vs_true/relative_features/"
+    path = "plots/autoencoder/residuals/HH4b/"
     mkpath(path)
     fig.savefig(f'{path}residuals_offset_{offset}_epoch_{epoch:02d}.pdf')
     plt.close()

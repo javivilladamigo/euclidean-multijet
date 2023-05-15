@@ -87,25 +87,40 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
-num_epochs = 2
-
+num_epochs = 3
 lr_init  = 0.01
 lr_scale = 0.25
 bs_scale = 2
-#bs_milestones = [1,3,6,10]
+
 bs_milestones = [10000000]
-#lr_milestones = [15,16,17,18,19,20,21,22,23,24]
 lr_milestones = [70, 80, 90]
 
-train_loss_tosave = [] # vectors to store loss during training for plotting afterwards (to be implemented)
-val_loss_tosave = []
-
-#train_batch_size = 2**10
 train_batch_size = 2**8
 infer_batch_size = 2**14
 max_train_batch_size = train_batch_size*64
 
 num_workers=4
+
+
+############ default hyperparameters for FvT ############
+# num_epochs = 20                                       #
+# lr_init  = 0.01                                       #
+# lr_scale = 0.25                                       #
+# bs_scale = 2                                          #
+#                                                       #
+# bs_milestones = [1,3,6,10]                            #
+# lr_milestones = [15,16,17,18,19,20,21,22,23,24]       #
+#                                                       #
+# train_batch_size = 2**10                              #
+# infer_batch_size = 2**14                              #
+# max_train_batch_size = train_batch_size*64            #
+#                                                       #
+# num_workers=8                                         #
+#                                                       #
+#########################################################
+
+train_loss_tosave = [] # vectors to store loss during training for plotting afterwards (to be implemented)
+val_loss_tosave = []
 
 
 
@@ -496,6 +511,18 @@ class Model_AE:
                 total_rel_rec_j_ = torch.cat((total_rel_rec_j_, rel_rec_j_), 0)
 
             plots.plot_training_residuals(total_rel_j_, total_rel_rec_j_, offset = self.train_valid_offset, epoch = self.epoch) # plot training residuals for pt, eta, phi
+            '''import matplotlib.pyplot as plt 
+            plt.hist(rel_j_scaled_[:, 0, 0], bins = 12, color = "firebrick")
+            plt.xlim(-2, 14)
+            plt.yscale("log")
+            plt.savefig("ST_scaled.pdf")
+            plt.close()
+
+            plt.hist(rel_rec_j_scaled_[:, 0, 0].detach().cpu().numpy(), bins = 12, color = "blue")
+            plt.xlim(-2, 14)
+            plt.yscale("log")
+            plt.savefig("recST_scaled.pdf")
+            plt.close()'''
         
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
@@ -543,6 +570,7 @@ class Model_AE:
 Arguments for execution
 '''
 if __name__ == '__main__':
+
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--train', default=False, action='store_true', help='Run model training')
     parser.add_argument('-tk', '--task', default='FvT', type = str, help='Type of classifier (FvT or SvB) to run')
@@ -747,3 +775,6 @@ if __name__ == '__main__':
                                         'event': event.event}
         else:
             sys.exit("Task not found in model filename. Write models/(dec, SvB, FvT)_Basic[...]")
+    
+    if not args.train and not args.model:
+        sys.exit("No --train nor --model specified. Script is not training nor precomputing friend TTrees. Exiting...")
