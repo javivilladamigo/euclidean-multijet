@@ -214,6 +214,24 @@ def calcDeltaPhi(v1, v2): #expects eta, phi representation
     dPhi = torch.min(dPhi12,dPhi21)
     return dPhi
 
+def setLeadingEtaPositive(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
+    etaSign = 1-2*(batched_v[:,1,0:1]<0).float() # -1 if eta is negative, +1 if eta is zero or positive
+    batched_v[:,1,:] = etaSign * batched_v[:,1,:]
+    return batched_v
+
+def setLeadingPhiTo0(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
+    # set phi = 0 for the leading jet and rotate the event accordingly
+    phi_ref = batched_v[:,2,0:1] # get the leading jet phi for each event
+    batched_v[:,2,:] = batched_v[:,2,:] - phi_ref # rotate all phi to make phi_lead = 0
+    batched_v[:,2,:][batched_v[:,2,:]>torch.pi] -= 2*torch.pi # retransform the phi that are > pi
+    batched_v[:,2,:][batched_v[:,2,:]<-torch.pi] += 2*torch.pi # same for the phi that are < -pi
+    return batched_v
+
+def setSubleadingPhiPositive(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
+    phiSign = 1-2*(batched_v[:,2,1:2]<0).float() # -1 if phi2 is negative, +1 if phi2 is zero or positive
+    batched_v[:,2,1:4] = phiSign * batched_v[:,2,1:4]
+    return batched_v
+
 #
 # Some different non-linear units
 #
@@ -257,9 +275,12 @@ class Input_Embed(nn.Module):
         j = j.view(-1,4,4)
 
         # make leading jet eta positive direction so detector absolute eta info is removed
-        etaSign = 1-2*(j[:,1,0:1]<0).float() # -1 if eta is negative, +1 if eta is zero or positive
-        j[:,1,:] = etaSign * j[:,1,:]
-        
+        j = setLeadingEtaPositive(j)
+        # set phi0 = 0 for the leading jet and rotate the event accordingly
+        j = setLeadingPhiTo0(j)
+        # set phi1 > 0 by flipping wrt xz plane
+        j = setSubleadingPhiPositive(j)
+
         d, dPxPyPzE = addFourVectors(j[:,:,(0,2,0,1,0,1)], 
                                      j[:,:,(1,3,2,3,3,2)])
 
@@ -276,10 +297,12 @@ class Input_Embed(nn.Module):
         # set up all possible jet pairings
         j = torch.cat([j, j[:,:,(0,2,1,3)], j[:,:,(0,3,1,2)]],2)
 
+        
         # only keep relative angular information so that learned features are invariant under global phi rotations and eta/phi flips
         j[:,2:3,(0,2,4,6,8,10)] = calcDeltaPhi(d, j[:,:,(0,2,4,6,8,10)]) # replace jet phi with deltaPhi between dijet and jet
         j[:,2:3,(1,3,5,7,9,11)] = calcDeltaPhi(d, j[:,:,(1,3,5,7,9,11)])
-
+        
+        
         d[:,2:3,(0,2,4)] = calcDeltaPhi(q, d[:,:,(0,2,4)])
         d[:,2:3,(1,3,4)] = calcDeltaPhi(q, d[:,:,(1,3,5)])
 
@@ -419,22 +442,18 @@ class Basic_CNN_AE(nn.Module):
         return
     
     def forward(self, j):
-        j_scaled = j.clone()
+        j_rotated = j.clone()
 
-        if self.construct_rel_features:
-            rel_j = torch.zeros((j.shape[0], 3, 4)) # three relative features for 4 jets
-            rel_j_scaled = torch.zeros((j.shape[0], 3, 4)) # the normalized feature vector for loss computation
-            
-            rel_j[:, 0, :] = j[:, 0, (0,1,2,3)] + j[:, 0, (1,2,3,0)] # construct scalar pt of dijets
-            rel_j[:, 1, :] = (j[:, 1, (0,1,2,3)] - j[:, 1, (1,2,3,0)]).abs() # construct differences of eta (12, 23, 34)
-            rel_j[:, 2, (0,1,2,3)] = calcDeltaPhi(j[:, 2, (0,1,2,3)], j[:, 2, (1,2,3,0)]) # eliminate redundances -> dPhi in [pi, 2pi] is passed to the range [0, pi] (equivalent to changing the order of the subtraction inside the absolute value)
+        # make leading jet eta positive direction so detector absolute eta info is removed
+        j_rotated = setLeadingEtaPositive(j)
+        # set phi = 0 for the leading jet and rotate the event accordingly
+        j_rotated = setLeadingPhiTo0(j_rotated)
+        # set phi1 > 0 by flipping wrt the xz plane
+        j_rotated = setSubleadingPhiPositive(j_rotated)
+        jPxPyPz_scaled = PxPyPzE(j_rotated)
 
-            rel_batch_mean = rel_j.mean(dim = (0, 2))
-            rel_batch_std = rel_j.std(dim = (0, 2))
-
-        batch_mean = j.mean(dim = (0, 2))
-        batch_std = j.std(dim = (0, 2))
-
+        batch_mean = jPxPyPz_scaled.mean(dim = (0, 2))
+        batch_std = jPxPyPz_scaled.std(dim = (0, 2))
             
         # j.shape = [batch_size, 4, 4]
 
@@ -467,32 +486,17 @@ class Basic_CNN_AE(nn.Module):
 
         rec_j = self.out_lin(e)
         rec_j = rec_j.view(-1, 3, 4) # convert to 3x4 events (3 features x 4 jets)
-
         rec_j_scaled = rec_j.clone()
-        rel_rec_j_scaled = rel_j.clone()
 
-        rel_rec_j = torch.zeros((rec_j.shape[0], 3, 4))
-        rel_rec_j[:, 0, :] = rec_j[:, 0, (0,1,2,3)] + rec_j[:, 0, (1,2,3,0)] # construct scalar pt of dijets
-        rel_rec_j[:, 1, :] = (rec_j[:, 1, (0,1,2,3)] - rec_j[:, 1, (1,2,3,0)]).abs() # construct differences of eta and phi (12, 23, 34)
-        rel_rec_j[:, 2, (0,1,2,3)] = calcDeltaPhi(rec_j[:, 2, (0,1,2,3)], rec_j[:,2,(1,2,3,0)]) # eliminate redundances -> dPhi in [pi, 2pi] is passed to the range [0, pi] (equivalent to changing the order of the subtraction inside the absolute value)
 
         for i in range(len(rec_j[0, :, 0])):
             # obtained a normalized j for the computation of the loss
             
-            j_scaled[:, i, :] = (j_scaled[:, i, :] - batch_mean[i]) / batch_std[i]
+            jPxPyPz_scaled[:, i, :] = (jPxPyPz_scaled[:, i, :] - batch_mean[i]) / batch_std[i]
             rec_j_scaled[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
-
-            if self.construct_rel_features:
-                rel_j_scaled[:, i, :] = (rel_j[:, i, :] - rel_batch_mean[i]) / rel_batch_std[i]
-                rel_rec_j_scaled[:, i, :] = (rel_rec_j[:, i, :] - rel_batch_mean[i]) / rel_batch_std[i]
-                
+            
         
-        
-        
-        if self.construct_rel_features:
-            return rec_j, rec_j_scaled, j_scaled, rel_rec_j, rel_rec_j_scaled, rel_j, rel_j_scaled # output the rec_j, also the scaled variables for loss computation
-        else:
-            return rec_j, rec_j_scaled, j_scaled, None, None, None # output the rec_j, also the scaled variables for loss computation
+        return rec_j, rec_j_scaled, PxPyPzE(j_rotated), jPxPyPz_scaled # output the rec_j, also the scaled variables for loss computation
 
 
 
