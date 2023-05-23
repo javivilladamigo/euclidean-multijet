@@ -12,7 +12,7 @@ def vector_print(vector, end='\n'):
 
     
 class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has what seem like typos in GBN definition. 
-    def __init__(self, features, ghost_batch_size=32, number_of_ghost_batches=64, n_averaging=1, stride=1, eta=0.9, bias=True, device='cpu', name='', conv=False, features_out=None):
+    def __init__(self, features, ghost_batch_size=32, number_of_ghost_batches=64, n_averaging=1, stride=1, eta=0.9, bias=True, device='cpu', name='', conv=False, features_out=None): # number_of_ghost_batches was initially set to 64
         super(Ghost_Batch_Norm, self).__init__()
         self.name = name
         self.index = None
@@ -185,8 +185,7 @@ def PtEtaPhiM(v):
     e  = v[:,3:4]
 
     Pt  = (px**2+py**2).sqrt()
-    ysign = py.sign()
-    ysign = ysign + (ysign==0.0).float() # if py==0, px==Pt and acos(1)=pi/2 so we need zero protection on py.sign()
+    ysign = 1-2*(py<0).float() # if py==0, px==Pt and acos(1)=pi/2 so we need zero protection on py.sign() --> changed to the current shape to avoid 0-gradient of .sign()
     Phi = (px/Pt).acos() * ysign
     Eta = (pz/Pt).asinh()
 
@@ -257,13 +256,13 @@ class Input_Embed(nn.Module):
         self.device = device
 
         # embed inputs to dijetResNetBlock in target feature space
-        self.jet_embed     = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='jet embedder', device=self.device) # phi is relative to dijet, mass is zero in toy data
+        self.jet_embed     = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='jet embedder', device=self.device) # phi is relative to dijet, mass is zero in toy data. # 3 features -> 8 features
         self.jet_conv      = Ghost_Batch_Norm(self.d, conv=True, name='jet convolution', device = self.device)
 
-        self.dijet_embed   = Ghost_Batch_Norm(4, features_out=self.d, conv=True, name='dijet embedder', device = self.device) # phi is relative to quadjet
+        self.dijet_embed   = Ghost_Batch_Norm(4, features_out=self.d, conv=True, name='dijet embedder', device = self.device) # phi is relative to quadjet, # 4 features -> 8 features
         self.dijet_conv    = Ghost_Batch_Norm(self.d, conv=True, name='dijet convolution', device = self.device) 
 
-        self.quadjet_embed = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='quadjet embedder', device = self.device) # phi is removed
+        self.quadjet_embed = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='quadjet embedder', device = self.device) # phi is removed. # 3 features -> 8 features
         self.quadjet_conv  = Ghost_Batch_Norm(self.d, conv=True, name='quadjet convolution', device = self.device)
 
         #self.register_buffer('tau', torch.tensor(math.tau, dtype=torch.float))
@@ -273,13 +272,6 @@ class Input_Embed(nn.Module):
     def data_prep(self, j):
         j = j.clone()# prevent overwritting data from dataloader when doing operations directly from RAM rather than copying to VRAM
         j = j.view(-1,4,4)
-
-        # make leading jet eta positive direction so detector absolute eta info is removed
-        j = setLeadingEtaPositive(j)
-        # set phi0 = 0 for the leading jet and rotate the event accordingly
-        j = setLeadingPhiTo0(j)
-        # set phi1 > 0 by flipping wrt xz plane
-        j = setSubleadingPhiPositive(j)
 
         d, dPxPyPzE = addFourVectors(j[:,:,(0,2,0,1,0,1)], 
                                      j[:,:,(1,3,2,3,3,2)])
@@ -398,31 +390,79 @@ class Basic_CNN_AE(nn.Module):
         self.device = device
         self.d = dimension
         self.out_features = out_features
-        self.n_ghost_batches = 64
+        self.n_ghost_batches = 16
         self.construct_rel_features = construct_rel_features
 
 
         self.name = f'Basic_CNN_AE_{self.d}'
 
-        self.input_embed = Input_Embed(self.d)
-        self.jets_to_dijets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
-        self.dijets_to_quadjets = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        self.input_embed            = Input_Embed(self.d)
+        self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
         
-        self.select_q = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
-
-
+        self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+        
         # any kind of self.out should convert a [batch_size, 8, 1] into a [batch_size, 16, 1]
-        self.out_lin = nn.Sequential(
+        '''self.out_lin = nn.Sequential(
             nn.Flatten(start_dim = 1),
             nn.Linear(in_features = self.d, out_features = 10, device = self.device),
-            #nn.Dropout(p = 0.2),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(in_features = 10, out_features = self.out_features, device = self.device),
             nn.Unflatten(dim = 1, unflattened_size = (self.out_features, 1))
+        )'''
+        
+        self.decode_q               = nn.ConvTranspose1d(self.d, self.d, 3)
+        self.dijets_from_quadjets   = nn.ConvTranspose1d(self.d, self.d, 2, stride = 2)
+        self.decode_d               = nn.ConvTranspose1d(self.d, self.d, 6)
+        self.jets_from_dijets       = nn.ConvTranspose1d(self.d, self.d, 2, stride = 2)
+        self.decode_j               = nn.ConvTranspose1d(self.d, self.d, 12)
+
+        self.select_dec             = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+
+        self.decode_Px              = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 10, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.ReLU(),
+            nn.Linear(in_features = 10, out_features = 4, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
         )
 
+        self.decode_Py              = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 20, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.ReLU(),
+            nn.Linear(in_features = 20, out_features = 4, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+        )
 
-        self.out_GBN      = Ghost_Batch_Norm(self.d, features_out=self.out_features, conv=True, device = self.device)
+        self.decode_Pz              = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 10, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.ReLU(),
+            nn.Linear(in_features = 10, out_features = 4, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+        )
+
+        self.decode_E               = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 10, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.ReLU(),
+            nn.Linear(in_features = 10, out_features = 4, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+        )
+
+        self.jPxPyPzE_conv          = nn.Sequential(
+            nn.Conv1d(4, 4, 3, stride = 1),
+            nn.ReLU(),
+            nn.ConvTranspose1d(4, 4, 3, stride = 1))
+
+
+
+
 
     
     def set_mean_std(self, j):
@@ -434,72 +474,99 @@ class Basic_CNN_AE(nn.Module):
         self.jets_to_dijets.set_ghost_batches(n_ghost_batches)
         self.dijets_to_quadjets.set_ghost_batches(n_ghost_batches)
         self.select_q.set_ghost_batches(n_ghost_batches)
-        self.out_GBN.set_ghost_batches(n_ghost_batches)
         self.n_ghost_batches = n_ghost_batches
 
-    def inverse_tfm(self, reconstructed_jets):
-        # function to re-apply the inverse transformations to the jets
-        return
     
     def forward(self, j):
+        # j.shape = [batch_size, 4, 4]
         j_rotated = j.clone()
 
         # make leading jet eta positive direction so detector absolute eta info is removed
-        j_rotated = setLeadingEtaPositive(j)
         # set phi = 0 for the leading jet and rotate the event accordingly
-        j_rotated = setLeadingPhiTo0(j_rotated)
         # set phi1 > 0 by flipping wrt the xz plane
-        j_rotated = setSubleadingPhiPositive(j_rotated)
-        jPxPyPz_scaled = PxPyPzE(j_rotated)
+        j_rotated = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rotated)))
+    
 
-        batch_mean = jPxPyPz_scaled.mean(dim = (0, 2))
-        batch_std = jPxPyPz_scaled.std(dim = (0, 2))
-            
-        # j.shape = [batch_size, 4, 4]
+        d_rotated, dPxPyPzE_rotated = addFourVectors(   j_rotated[:,:,(0,2,0,1,0,1)], 
+                                                        j_rotated[:,:,(1,3,2,3,3,2)])
+        q_rotated, qPxPyPzE_rotated = addFourVectors(   d_rotated[:,:,(0,2,4)],
+                                                        d_rotated[:,:,(1,3,5)], 
+                                                        v1PxPyPzE = dPxPyPzE_rotated[:,:,(0,2,4)],
+                                                        v2PxPyPzE = dPxPyPzE_rotated[:,:,(1,3,5)])
+        m2j = d_rotated[:, 3:4, :]
+        m4j = q_rotated[:, 3:4, 0]
 
-        j, d, q = self.input_embed(j)
+        # convert to PxPyPzE and compute means and variances
+        jPxPyPzE = PxPyPzE(j_rotated)
+        jPxPyPzE_scaled = jPxPyPzE.clone()
+        batch_mean = jPxPyPzE.mean(dim = (0, 2))
+        batch_std = jPxPyPzE.std(dim = (0, 2))
 
-        # j.shape = [batch_size, 8, 12]
-        # d.shape = [batch_size, 8, 6]
-        # q.shape = [batch_size, 8, 3]
-
-        d = d + NonLU(self.jets_to_dijets(j))
-        q = q + NonLU(self.dijets_to_quadjets(d))
-
-        # d.shape = [batch_size, 8, 6]
-        # q.shape = [batch_size, 8, 3]
-
+        m2j_scaled = m2j.clone() # [batch_size, 1, 6]
+        m2j_mean = m2j.mean(dim = (0, 1)) # [6]
+        m2j_std = m2j.std(dim = (0, 1)) # [6]
+        m4j_scaled = m4j.clone() # [batch_size, 1]
+        m4j_mean = m4j.mean(dim = 0) # [1]
+        m4j_std = m4j.std(dim = 0) # [1]
+        
+        # j_rotated.shape = [batch_size, 4, 4]
+        j, d, q = self.input_embed(j_rotated)                                                   # j.shape = [batch_size, 8, 12]
+                                                                                                # d.shape = [batch_size, 8, 6]
+                                                                                                # q.shape = [batch_size, 8, 3]
+        d = d + NonLU(self.jets_to_dijets(j))                                                   # d.shape = [batch_size, 8, 6]
+        q = q + NonLU(self.dijets_to_quadjets(d))                                               # q.shape = [batch_size, 8, 3]
         #compute a score for each event quadjet
-        q_logits = self.select_q(q)
-
-        # q_logits.shape = [batch_size, 1, 3]
-
+        q_logits = self.select_q(q)                                                             # q_logits.shape = [batch_size, 1, 3]
         #convert the score to a 'probability' with softmax. This way the classifier is learning which pairing is most relevant to the classification task at hand.
-        q_score = F.softmax(q_logits, dim=-1)
-
-        # q_score.shape = [batch_size, 1, 3]
-
+        q_score = F.softmax(q_logits, dim=-1)                                                   # q_score.shape = [batch_size, 1, 3]
         q_logits = q_logits.view(-1, 3)
-
         #add together the quadjets with their corresponding probability weight
-        e = torch.matmul(q, q_score.transpose(1,2))
-
-        rec_j = self.out_lin(e)
-        rec_j = rec_j.view(-1, 3, 4) # convert to 3x4 events (3 features x 4 jets)
-        rec_j_scaled = rec_j.clone()
+        e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1]
 
 
-        for i in range(len(rec_j[0, :, 0])):
+
+        dec_q = self.decode_q(e)                                                                # dec_q.shape = [batch_size, 8, 3]
+        
+        dec_d =  self.decode_d(e) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
+        dec_j = self.decode_j(e) + NonLU(self.jets_from_dijets(dec_d))                          # dec_j.shape = [batch_size, 8, 12]
+        full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
+        selected_dec = self.select_dec(full_dec)
+
+        rec_Px = self.decode_Px(selected_dec)
+        rec_Py = self.decode_Py(selected_dec)
+        rec_Pz = self.decode_Pz(selected_dec)
+        rec_E = self.decode_E(selected_dec)
+        rec_jPxPyPzE = torch.cat((rec_Px, rec_Py, rec_Pz, rec_E), dim = 2).permute(0,2,1)
+        
+        #rec_jPxPyPzE = self.jPxPyPzE_conv(rec_jPxPyPzE)
+
+        rec_d, rec_dPxPyPzE = addFourVectors(   PtEtaPhiM(rec_jPxPyPzE)[:,:,(0,2,0,1,0,1)], 
+                                                PtEtaPhiM(rec_jPxPyPzE)[:,:,(1,3,2,3,3,2)])
+        rec_q, rec_qPxPyPzE = addFourVectors(   rec_d[:,:,(0,2,4)],
+                                                rec_d[:,:,(1,3,5)])
+        rec_m2j = rec_d[:, 3:4, :]
+        rec_m2j_scaled  = rec_m2j.clone()
+        rec_m4j = rec_q[:, 3:4, 0]
+        rec_m4j_scaled  = rec_m4j.clone()
+        
+        #rec_j = rec_j.view(-1, 3, 4) # convert to 3x4 events (4 features x 4 jets)
+        rec_jPxPyPzE_scaled = rec_jPxPyPzE.clone()
+
+        for i in range(len(rec_jPxPyPzE[0, :, 0])):
             # obtained a normalized j for the computation of the loss
-            
-            jPxPyPz_scaled[:, i, :] = (jPxPyPz_scaled[:, i, :] - batch_mean[i]) / batch_std[i]
-            rec_j_scaled[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
+            jPxPyPzE_scaled[:, i, :] = (jPxPyPzE_scaled[:, i, :] - batch_mean[i]) / batch_std[i]
+            rec_jPxPyPzE_scaled[:, i, :] = (rec_jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
+        
+        for i in range(len(rec_m2j[0, 0, :])):
+            m2j_scaled[:, 0, i] = (m2j_scaled[:, 0, i] - m2j_mean[i]) / m2j_std[i]
+            rec_m2j_scaled[:, 0, i] = (rec_m2j[:, 0, i] - m2j_mean[i]) / m2j_std[i]
+        
+        m4j_scaled[:] = (m4j_scaled[:] - m4j_mean) / m4j_std
+        rec_m4j_scaled[:] = (rec_m4j_scaled[:] - m4j_mean) / m4j_std
+
             
         
-        return rec_j, rec_j_scaled, PxPyPzE(j_rotated), jPxPyPz_scaled # output the rec_j, also the scaled variables for loss computation
-
-
-
+        return rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, rec_m2j_scaled, m2j, m2j_scaled, rec_m4j, rec_m4j_scaled, m4j, m4j_scaled
 
 class K_Fold(nn.Module):
     def __init__(self, models, task = 'FvT'):
@@ -534,9 +601,9 @@ class K_Fold(nn.Module):
                 if self.models[0].construct_rel_features: # check if the models were constructed with relative features
                     rec_j, rec_j_scaled, j_scaled, rel_rec_j, rel_rec_j_scaled, rel_j_scaled = model(j)
                 else:
-                    rec_j, rec_j_scaled, j_scaled = model(j)
+                    rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, rec_m2j_scaled, m2j, m2j_scaled, rec_m4j, rec_m4j_scaled, m4j, m4j_scaled = model(j)
 
-            return rec_j
+            return rec_jPxPyPzE
 
 
 

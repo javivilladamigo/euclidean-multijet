@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 import networks
 import plots
+import json
 
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1' #this doesn't work, need to run `conda env config vars set PYTORCH_ENABLE_MPS_FALLBACK=1` and then reactivate the conda environment
 
@@ -87,16 +88,17 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
-num_epochs = 400
+num_epochs = 1
 lr_init  = 0.01
-lr_scale = 0.75
+lr_scale = 0.5
 bs_scale = 2
 
-bs_milestones = [200, 300, 350]
-lr_milestones = [100, 200, 300, 320, 340, 360, 380]
+bs_milestones =     [50, 100, 150, 200, 275]
+lr_milestones =     [50, 90, 140]
+gb_milestones =     [5, 7, 10, 15, 20, 30, 40, 50, 100, 150, 200]
 
-train_batch_size = 2**8
-infer_batch_size = 2**12
+train_batch_size = 2**9
+infer_batch_size = 2**13
 max_train_batch_size = train_batch_size*64
 
 num_workers=8
@@ -136,7 +138,7 @@ class Loader_Result:
         self.w = dataset.tensors[1] if model.task == 'dec' else dataset.tensors[2]
         self.w_sum = self.w.sum()
         self.cross_entropy = torch.zeros(self.n)
-        self.decoding_loss = torch.zeros(self.n, 1, 11)  # [batch_size, nb_of_features, effective_nb_of_jets]
+        self.decoding_loss = torch.zeros(self.n, 1, 15)  # [batch_size, nb_of_features, effective_nb_of_jets]
                                                         # nb_of_features is the number of features reconstructed (i.e. how many features from [pt, eta, phi, mass])
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
         self.n_done = 0
@@ -162,7 +164,7 @@ class Loader_Result:
         self.cross_entropy[self.n_done:self.n_done+n_batch] = cross_entropy_batch
         self.n_done += n_batch
 
-    def infer_batch_AE(self, j, rec_j): # expecting same sized j and rec_j
+    def infer_batch_AE(self, j, rec_j, m2j, rec_m2j, m4j, rec_m4j): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
         
         #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
@@ -170,9 +172,14 @@ class Loader_Result:
         mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         mse_loss_batch_Py = F.mse_loss(j[:, 1:2, 1:4], rec_j[:, 1:2, 1:4], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
         mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz], dim = 2) # after concatenating obtain a [batch x 1 x 11] (4 Px losses + 3 Py losses + 4 Pz losses)
-
-
+        mse_loss_batch_E = F.mse_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        
+        mse_loss_m2j = F.mse_loss(m2j, rec_m2j, reduction = 'none') # mse loss for m2j [batch_shape, 1, 6]
+        mse_loss_m4j = F.mse_loss(m4j, rec_m4j, reduction = 'none').unsqueeze(1) # mse loss for m4j [batch_shape, 1, 1](its [batch_shape, 1, 3] but all 3 elements show the same m4j)
+      
+        
+        mse_loss_batch = torch.cat([mse_loss_batch_Px, 2.*mse_loss_batch_Py, mse_loss_batch_Pz, 1.5*mse_loss_batch_E], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
+    
         assert mse_loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and mse_loss_batch shapes mismatch"
 
         self.decoding_loss[self.n_done : self.n_done + n_batch] = mse_loss_batch
@@ -186,9 +193,8 @@ class Loader_Result:
     def infer_done_AE(self):
 
         self.loss = (self.w * self.decoding_loss.permute(1,2,0)).permute(2,0,1).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
-        
         self.history['loss'].append(copy(self.loss))
-        train_loss_tosave.append(self.loss) if self.train else val_loss_tosave.append(self.loss)
+        train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
         self.n_done = 0 
 
 
@@ -208,18 +214,24 @@ class Loader_Result:
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate*0.98 + loss_batch.item()*(1-0.98) # running average with 0.98 exponential decay rate
 
-    def train_batch_AE(self, j, rec_j, w): # expecting same sized j and rec_j
+    def train_batch_AE(self, j, rec_j, m2j, rec_m2j, m4j, rec_m4j, w): # expecting same sized j and rec_j
 
         #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none')
+        
         mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         mse_loss_batch_Py = F.mse_loss(j[:, 1:2, 1:4], rec_j[:, 1:2, 1:4], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
         mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz], dim = 2) # after concatenating obtain a [batch x 1 x 11] (4 Px losses + 3 Py losses + 4 Pz losses)
+        mse_loss_batch_E = F.mse_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
 
-        loss_batch = ((w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum()) # multiply weight for all the jet features and recover the original shape of the features 
+        mse_loss_m2j = F.mse_loss(m2j, rec_m2j, reduction = 'none') # mse loss for m2j [batch_shape, 1, 6]
+        mse_loss_m4j = F.mse_loss(m4j, rec_m4j, reduction = 'none').unsqueeze(1) # mse loss for m4j [batch_shape, 1, 1](its [batch_shape, 1, 3] but all 3 elements show the same m4j)
         
+        mse_loss_batch = torch.cat([mse_loss_batch_Px, 2.*mse_loss_batch_Py, mse_loss_batch_Pz, 1.5*mse_loss_batch_E], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
+        
+        loss_batch = ((w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum()) # multiply weight for all the jet features and recover the original shape of the features 
+
         loss_batch.backward()
-        self.loss_estimate = self.loss_estimate * 0. + loss_batch.item() * 1.
+        self.loss_estimate = self.loss_estimate * .02 + 0.98*loss_batch.item()
 
 
 
@@ -403,11 +415,12 @@ class Model:
 Model used for autoencoding
 '''
 class Model_AE:
-    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = '', construct_rel_features = False):
+    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = '', construct_rel_features = False, sample = ''):
         self.task = task
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.construct_rel_features = construct_rel_features
+        self.sample = sample
         self.network = networks.Basic_CNN_AE(8, 12, construct_rel_features = self.construct_rel_features)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
@@ -445,6 +458,7 @@ class Model_AE:
         self.valid_result = Loader_Result(self, dataset_valid)
 
         print(f'{self.train_result.n:,} training samples split into {len(self.train_result.train_loader):,} batches of {train_batch_size:,}')
+        print(f'{self.valid_result.n:,} validation samples split into {len(self.valid_result.infer_loader):,} batches of {infer_batch_size:,}')
     
     @torch.no_grad()
     def inference(self, result):
@@ -455,9 +469,10 @@ class Model_AE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            rec_j, rec_j_scaled, jPxPyPz, jPxPyPz_scaled = self.network(j)
+            rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, rec_m2j_scaled, m2j, m2j_scaled, rec_m4j, rec_m4j_scaled, m4j, m4j_scaled = self.network(j)
+            #print(rec_m2j_scaled[0])
             
-            result.infer_batch_AE(jPxPyPz_scaled[:, 0:3, :], rec_j_scaled)
+            result.infer_batch_AE(jPxPyPzE_scaled, rec_jPxPyPzE_scaled, m2j_scaled, rec_m2j_scaled, m4j_scaled, rec_m4j_scaled)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -487,9 +502,9 @@ class Model_AE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            rec_j, rec_j_scaled, jPxPyPz, jPxPyPz_scaled = self.network(j)
+            rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, rec_m2j_scaled, m2j, m2j_scaled, rec_m4j, rec_m4j_scaled, m4j, m4j_scaled = self.network(j)
             
-            result.train_batch_AE(jPxPyPz_scaled[:, 0:3, :], rec_j_scaled, w)
+            result.train_batch_AE(jPxPyPzE_scaled, rec_jPxPyPzE_scaled, m2j_scaled, rec_m2j_scaled, m4j_scaled, rec_m4j_scaled, w)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
@@ -508,44 +523,61 @@ class Model_AE:
 
     def run_epoch(self, plot_res):
         self.epoch += 1
+        
         self.train()
         self.train_inference()        
         self.valid_inference()
         self.scheduler.step()
-
-        if plot_res:
-            total_jPxPyPz_ = torch.Tensor(())
-            total_rec_jPxPyPz_ = torch.Tensor(())
-            for i, (j_, w_, R_, e_) in enumerate(self.valid_result.infer_loader):
-                rec_j_, rec_j_scaled_, jPxPyPz_, jPxPyPz_scaled_ = self.network(j_) # forward pass
-                total_jPxPyPz_ = torch.cat((total_jPxPyPz_, jPxPyPz_[:, 0:3, :]), 0)
-                total_rec_jPxPyPz_ = torch.cat((total_rec_jPxPyPz_, rec_j_), 0)
-            plots.plot_training_residuals(total_jPxPyPz_, total_rec_jPxPyPz_, offset = self.train_valid_offset, epoch = self.epoch) # plot training residuals for pt, eta, phi
-            '''import matplotlib.pyplot as plt 
-            plt.hist(jPxPyPz_scaled_[:, 0, 0], bins = 12, color = "firebrick")
-            plt.xlim(-2, 14)
-            plt.yscale("log")
-            plt.savefig("px_scaled.pdf")
-            plt.close()
-
-            plt.hist(jPxPyPz_scaled_[:, 1, 0], bins = 12, color = "blue")
-            plt.xlim(-2, 14)
-            plt.yscale("log")
-            plt.savefig("py_scaled.pdf")
-            plt.close()
-
-
-            plt.hist(jPxPyPz_scaled_[:, 2, 0].detach().cpu().numpy(), bins = 12, color = "green")
-            plt.xlim(-2, 14)
-            plt.yscale("log")
-            plt.savefig("pz_scaled.pdf")
-            plt.close()'''
         
 
-        if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
-            gb_decay = 4 # 2 if self.epoch in bs_mile
-            print(f'set_ghost_batches({self.network.n_ghost_batches//gb_decay})')
-            self.network.set_ghost_batches(self.network.n_ghost_batches//gb_decay)
+        if plot_res and self.epoch % 10 == 0:
+            total_jPxPyPzE_ = torch.Tensor(())
+            total_rec_jPxPyPzE_ = torch.Tensor(())
+            total_m2j_ = torch.Tensor(())
+            total_rec_m2j_ = torch.Tensor(())
+            total_m4j_ = torch.Tensor(())
+            total_rec_m4j_ = torch.Tensor(())
+            for i, (j_, w_, R_, e_) in enumerate(self.train_result.train_loader):
+                rec_jPxPyPzE_, rec_jPxPyPzE_scaled_, jPxPyPzE_, jPxPyPzE_scaled_, rec_m2j_, rec_m2j_scaled_, m2j_, m2j_scaled_, rec_m4j_, rec_m4j_scaled_, m4j_, m4j_scaled_ = self.network(j_) # forward pass
+
+                total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
+                total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
+
+                total_m4j_ = torch.cat((total_m4j_, m4j_), 0)
+                total_rec_m4j_ = torch.cat((total_rec_m4j_, rec_m4j_), 0)
+
+                total_jPxPyPzE_ = torch.cat((total_jPxPyPzE_, jPxPyPzE_), 0)
+                total_rec_jPxPyPzE_ = torch.cat((total_rec_jPxPyPzE_, rec_jPxPyPzE_), 0)
+            print(total_m2j_[0])
+            print(total_rec_m2j_[0])
+            plots.plot_training_residuals(total_jPxPyPzE_, total_rec_jPxPyPzE_, total_m2j_, total_rec_m2j_, total_m4j_, total_rec_m4j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample) # plot training residuals for pt, eta, phi
+        
+        '''import matplotlib.pyplot as plt 
+        plt.hist(jPxPyPz_scaled_[:, 0, 0], bins = 12, color = "firebrick")
+        plt.xlim(-2, 14)
+        plt.yscale("log")
+        plt.savefig("px_scaled.pdf")
+        plt.close()
+
+        plt.hist(jPxPyPz_scaled_[:, 1, 0], bins = 12, color = "blue")
+        plt.xlim(-2, 14)
+        plt.yscale("log")
+        plt.savefig("py_scaled.pdf")
+        plt.close()
+
+
+        plt.hist(jPxPyPz_scaled_[:, 2, 0].detach().cpu().numpy(), bins = 12, color = "green")
+        plt.xlim(-2, 14)
+        plt.yscale("log")
+        plt.savefig("pz_scaled.pdf")
+        plt.close()'''
+        
+
+        if (self.epoch in bs_milestones or self.epoch in lr_milestones or self.epoch in gb_milestones): # and self.network.n_ghost_batches:
+            if self.epoch in gb_milestones and self.network.n_ghost_batches:
+                gb_decay = 4 # 2 if self.epoch in bs_mile
+                print(f'set_ghost_batches({self.network.n_ghost_batches//gb_decay})')
+                self.network.set_ghost_batches(self.network.n_ghost_batches//gb_decay)
             if self.epoch in bs_milestones:
                 self.increment_train_loader()
             if self.epoch in lr_milestones:
@@ -556,19 +588,19 @@ class Model_AE:
     def run_training(self, plot_res = False):
         self.network.set_mean_std(self.train_result.dataset.tensors[0])
         
-        #sys.stdout.write('\nMean and standard deviations set\n')
-        
         self.train_inference()
 
-        #sys.stdout.write('\ntrain_inference() done\n')
-
         self.valid_inference()
-
-        #sys.stdout.write('\nvalid_inference() done\n')
 
         for _ in range(num_epochs):
             self.run_epoch(plot_res = plot_res)
         self.save_model()
+
+        loss = {"train" : train_loss_tosave, "val" : val_loss_tosave}
+        with open("loss.txt", 'w') as file:
+            file.write(json.dumps(loss))
+        plots.plot_loss(loss, offset = self.train_valid_offset, sample = self.sample)
+        
     
     def save_model(self):
         self.history = {'train': self.train_result.history,
@@ -673,15 +705,16 @@ if __name__ == '__main__':
 
         # task is autoencoding
         if task == 'dec':
-            coffea_file = sorted(glob('data/HH4b_picoAOD*.coffea')) # file used for autoencoding
-
+            sample = 'fourTag'
+            coffea_file = sorted(glob(f'data/{sample}_picoAOD*.coffea')) # file used for autoencoding
+            
             # Load data
             event = load(coffea_file, selection = custom_selection)
 
             # Load model and run training
             model_args = {  'task': task,
                             'train_valid_offset': args.offset}
-            t=Model_AE(**model_args, construct_rel_features = False)
+            t=Model_AE(**model_args, construct_rel_features = False, sample = sample)
             t.make_loaders(event)
             t.run_training(plot_res = True)
 
@@ -755,7 +788,7 @@ if __name__ == '__main__':
             model_files = sorted(glob(args.model))
             models = []
             for model_file in model_files:
-                models.append(Model_AE(model_file=model_file, construct_rel_features=True))
+                models.append(Model_AE(model_file=model_file, construct_rel_features=False))
 
             task = models[0].task
             kfold = networks.K_Fold([model.network for model in models], task = task)
@@ -771,6 +804,9 @@ if __name__ == '__main__':
                 event = load(coffea_files)
                 j, e = coffea_to_tensor(event, decode = True, kfold=True)
                 rec_j = kfold(j, e)
+                rec_j = networks.PtEtaPhiM(rec_j)
+                print(rec_j.shape)
+
 
                 with uproot.recreate(output_file) as output:
                     kfold_dict = {}
@@ -782,14 +818,13 @@ if __name__ == '__main__':
                         kfold_dict[f'Jet{jet_nb}_pt']   = rec_j[:, 0, jet_nb - 1].numpy()
                         kfold_dict[f'Jet{jet_nb}_eta']  = rec_j[:, 1, jet_nb - 1].numpy()
                         kfold_dict[f'Jet{jet_nb}_phi']  = rec_j[:, 2, jet_nb - 1].numpy()
-                        #kfold_dict[f'Jet{jet_nb}_mass'] = rec_j[:, 3, jet_nb - 1].numpy()
+                        kfold_dict[f'Jet{jet_nb}_mass'] = rec_j[:, 3, jet_nb - 1].numpy()
 
-                    kfold_dict["preselection"] = np.array(event.preselection)
-                    kfold_dict["SR"] = np.array(event.SR)
-                    kfold_dict["SB"] = np.array(event.SB)
+                    #kfold_dict["preselection"] = np.array(event.preselection)
+                    #kfold_dict["SR"] = np.array(event.SR)
+                    #kfold_dict["SB"] = np.array(event.SB)
                     
-                    output['Events'] = {task: ak.zip(kfold_dict),
-                                        'event': event.event}
+                    output['Events'] = {task: ak.zip(kfold_dict)}
         else:
             sys.exit("Task not found in model filename. Write models/(dec, SvB, FvT)_Basic[...]")
     
