@@ -239,8 +239,8 @@ def SiLU(x): #SiLU https://arxiv.org/pdf/1702.03118.pdf   Swish https://arxiv.or
 
 
 def NonLU(x): #Pick the default non-Linear Unit
-    return SiLU(x) # often slightly better performance than standard ReLU
-    #return F.relu(x)
+    #return SiLU(x) # often slightly better performance than standard ReLU
+    return F.relu(x)
     #return F.rrelu(x, training=training)
     #return F.leaky_relu(x, negative_slope=0.1)
     #return F.elu(x)
@@ -436,7 +436,14 @@ class Basic_CNN_AE(nn.Module):
             nn.Linear(in_features = 20, out_features = 4, device = self.device),
             nn.Unflatten(dim = 1, unflattened_size = (4, 1))
         )
-
+        self.decode_PxPy            = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 20, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.ELU(),
+            nn.Linear(in_features = 20, out_features = 8, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (4, 2))
+        )
         self.decode_Pz              = nn.Sequential(
             nn.Flatten(start_dim = 1),
             nn.Linear(in_features = 21, out_features = 10, device = self.device),
@@ -459,6 +466,10 @@ class Basic_CNN_AE(nn.Module):
             nn.Conv1d(4, 4, 3, stride = 1),
             nn.ReLU(),
             nn.ConvTranspose1d(4, 4, 3, stride = 1))
+        
+        self.conv12                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1)
+        self.conv13                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1, dilation = 2)
+        self.conv14                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1, dilation = 3)
 
 
 
@@ -484,8 +495,8 @@ class Basic_CNN_AE(nn.Module):
         # make leading jet eta positive direction so detector absolute eta info is removed
         # set phi = 0 for the leading jet and rotate the event accordingly
         # set phi1 > 0 by flipping wrt the xz plane
-        j_rotated = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rotated)))
-    
+        # j_rotated = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rotated)))
+        
 
         d_rotated, dPxPyPzE_rotated = addFourVectors(   j_rotated[:,:,(0,2,0,1,0,1)], 
                                                         j_rotated[:,:,(1,3,2,3,3,2)])
@@ -502,12 +513,8 @@ class Basic_CNN_AE(nn.Module):
         batch_mean = jPxPyPzE.mean(dim = (0, 2))
         batch_std = jPxPyPzE.std(dim = (0, 2))
 
-        m2j_scaled = m2j.clone() # [batch_size, 1, 6]
-        m2j_mean = m2j.mean(dim = (0, 1)) # [6]
-        m2j_std = m2j.std(dim = (0, 1)) # [6]
-        m4j_scaled = m4j.clone() # [batch_size, 1]
-        m4j_mean = m4j.mean(dim = 0) # [1]
-        m4j_std = m4j.std(dim = 0) # [1]
+
+
         
         # j_rotated.shape = [batch_size, 4, 4]
         j, d, q = self.input_embed(j_rotated)                                                   # j.shape = [batch_size, 8, 12]
@@ -522,51 +529,57 @@ class Basic_CNN_AE(nn.Module):
         q_logits = q_logits.view(-1, 3)
         #add together the quadjets with their corresponding probability weight
         e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1]
-
-
+        #print(e[0])
 
         dec_q = self.decode_q(e)                                                                # dec_q.shape = [batch_size, 8, 3]
-        
         dec_d =  self.decode_d(e) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
         dec_j = self.decode_j(e) + NonLU(self.jets_from_dijets(dec_d))                          # dec_j.shape = [batch_size, 8, 12]
         full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
         selected_dec = self.select_dec(full_dec)
-
-        rec_Px = self.decode_Px(selected_dec)
-        rec_Py = self.decode_Py(selected_dec)
+        #rec_Px = self.decode_Px(selected_dec)
+        #rec_Py = self.decode_Py(selected_dec)
+        rec_PxPy = self.decode_PxPy(selected_dec)
         rec_Pz = self.decode_Pz(selected_dec)
         rec_E = self.decode_E(selected_dec)
-        rec_jPxPyPzE = torch.cat((rec_Px, rec_Py, rec_Pz, rec_E), dim = 2).permute(0,2,1)
         
-        #rec_jPxPyPzE = self.jPxPyPzE_conv(rec_jPxPyPzE)
-
+        
+        rec_jPxPyPzE = torch.cat((rec_PxPy, rec_Pz, rec_E), dim = 2).permute(0,2,1)
+        rec_jPxPyPzE_scaled = rec_jPxPyPzE.clone()
+        for i in range(len(rec_jPxPyPzE[0, :, 0])):
+            # obtained a normalized j for the computation of the loss
+            jPxPyPzE_scaled[:, i, :] = (jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
+            rec_jPxPyPzE_scaled[:, i, :] = (rec_jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
+        
+        
         rec_d, rec_dPxPyPzE = addFourVectors(   PtEtaPhiM(rec_jPxPyPzE)[:,:,(0,2,0,1,0,1)], 
                                                 PtEtaPhiM(rec_jPxPyPzE)[:,:,(1,3,2,3,3,2)])
         rec_q, rec_qPxPyPzE = addFourVectors(   rec_d[:,:,(0,2,4)],
                                                 rec_d[:,:,(1,3,5)])
         rec_m2j = rec_d[:, 3:4, :]
-        rec_m2j_scaled  = rec_m2j.clone()
         rec_m4j = rec_q[:, 3:4, 0]
-        rec_m4j_scaled  = rec_m4j.clone()
-        
-        #rec_j = rec_j.view(-1, 3, 4) # convert to 3x4 events (4 features x 4 jets)
-        rec_jPxPyPzE_scaled = rec_jPxPyPzE.clone()
 
-        for i in range(len(rec_jPxPyPzE[0, :, 0])):
-            # obtained a normalized j for the computation of the loss
-            jPxPyPzE_scaled[:, i, :] = (jPxPyPzE_scaled[:, i, :] - batch_mean[i]) / batch_std[i]
-            rec_jPxPyPzE_scaled[:, i, :] = (rec_jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
+        '''
+        m2j_scaled = m2j.clone()                                                                # [batch_size, 1, 6]
+        m4j_scaled = m4j.clone()                                                                # [batch_size, 1]
         
+        m2j_mean = m2j.mean(dim = (0, 1))                                                       # [6]
+        m4j_mean = m4j.mean(dim = 0)                                                            # [1]
+        
+        m2j_std = m2j.std(dim = (0, 1))                                                         # [6]
+        m4j_std = m4j.std(dim = 0)                                                              # [1] 
+        
+
+
+        rec_m2j_scaled  = rec_m2j.clone()
+        rec_m4j_scaled  = rec_m4j.clone()
         for i in range(len(rec_m2j[0, 0, :])):
             m2j_scaled[:, 0, i] = (m2j_scaled[:, 0, i] - m2j_mean[i]) / m2j_std[i]
             rec_m2j_scaled[:, 0, i] = (rec_m2j[:, 0, i] - m2j_mean[i]) / m2j_std[i]
-        
-        m4j_scaled[:] = (m4j_scaled[:] - m4j_mean) / m4j_std
-        rec_m4j_scaled[:] = (rec_m4j_scaled[:] - m4j_mean) / m4j_std
+        '''
 
             
         
-        return rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, rec_m2j_scaled, m2j, m2j_scaled, rec_m4j, rec_m4j_scaled, m4j, m4j_scaled
+        return rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, m2j, rec_m4j, m4j
 
 class K_Fold(nn.Module):
     def __init__(self, models, task = 'FvT'):

@@ -88,17 +88,17 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
-num_epochs = 1
+num_epochs = 20
 lr_init  = 0.01
 lr_scale = 0.5
 bs_scale = 2
 
-bs_milestones =     [50, 100, 150, 200, 275]
-lr_milestones =     [50, 90, 140]
+bs_milestones =     [50, 150, 200, 275]
+lr_milestones =     [50, 100, 200, 300, 400, 450]
 gb_milestones =     [5, 7, 10, 15, 20, 30, 40, 50, 100, 150, 200]
 
-train_batch_size = 2**9
-infer_batch_size = 2**13
+train_batch_size = 2**10
+infer_batch_size = 2**14
 max_train_batch_size = train_batch_size*64
 
 num_workers=8
@@ -123,6 +123,7 @@ num_workers=8
 
 train_loss_tosave = [] # vectors to store loss during training for plotting afterwards (to be implemented)
 val_loss_tosave = []
+min_val_loss = 999
 
 
 
@@ -138,7 +139,7 @@ class Loader_Result:
         self.w = dataset.tensors[1] if model.task == 'dec' else dataset.tensors[2]
         self.w_sum = self.w.sum()
         self.cross_entropy = torch.zeros(self.n)
-        self.decoding_loss = torch.zeros(self.n, 1, 15)  # [batch_size, nb_of_features, effective_nb_of_jets]
+        self.decoding_loss = torch.zeros(self.n, 1, 16)  # [batch_size, nb_of_features, effective_nb_of_jets]
                                                         # nb_of_features is the number of features reconstructed (i.e. how many features from [pt, eta, phi, mass])
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
         self.n_done = 0
@@ -164,21 +165,20 @@ class Loader_Result:
         self.cross_entropy[self.n_done:self.n_done+n_batch] = cross_entropy_batch
         self.n_done += n_batch
 
-    def infer_batch_AE(self, j, rec_j, m2j, rec_m2j, m4j, rec_m4j): # expecting same sized j and rec_j
+    def infer_batch_AE(self, j, rec_j): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
         
         #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         
         mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, 1:4], rec_j[:, 1:2, 1:4], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
+        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
         mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         mse_loss_batch_E = F.mse_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         
-        mse_loss_m2j = F.mse_loss(m2j, rec_m2j, reduction = 'none') # mse loss for m2j [batch_shape, 1, 6]
-        mse_loss_m4j = F.mse_loss(m4j, rec_m4j, reduction = 'none').unsqueeze(1) # mse loss for m4j [batch_shape, 1, 1](its [batch_shape, 1, 3] but all 3 elements show the same m4j)
-      
-        
-        mse_loss_batch = torch.cat([mse_loss_batch_Px, 2.*mse_loss_batch_Py, mse_loss_batch_Pz, 1.5*mse_loss_batch_E], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
+        pt = (j[:, 0:1, :]**2 + j[:, 1:2, :]**2).sqrt()
+        reco_pt = (rec_j[:, 0:1, :]**2 + rec_j[:, 1:2, :]**2).sqrt()
+        mse_loss_batch_pt = F.mse_loss(pt, reco_pt, reduction = 'none')
+        mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz, mse_loss_batch_pt], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
     
         assert mse_loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and mse_loss_batch shapes mismatch"
 
@@ -214,21 +214,22 @@ class Loader_Result:
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate*0.98 + loss_batch.item()*(1-0.98) # running average with 0.98 exponential decay rate
 
-    def train_batch_AE(self, j, rec_j, m2j, rec_m2j, m4j, rec_m4j, w): # expecting same sized j and rec_j
+    def train_batch_AE(self, j, rec_j, w): # expecting same sized j and rec_j
 
         #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none')
         
         mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, 1:4], rec_j[:, 1:2, 1:4], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
+        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
         mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         mse_loss_batch_E = F.mse_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
 
-        mse_loss_m2j = F.mse_loss(m2j, rec_m2j, reduction = 'none') # mse loss for m2j [batch_shape, 1, 6]
-        mse_loss_m4j = F.mse_loss(m4j, rec_m4j, reduction = 'none').unsqueeze(1) # mse loss for m4j [batch_shape, 1, 1](its [batch_shape, 1, 3] but all 3 elements show the same m4j)
-        
-        mse_loss_batch = torch.cat([mse_loss_batch_Px, 2.*mse_loss_batch_Py, mse_loss_batch_Pz, 1.5*mse_loss_batch_E], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
-        
-        loss_batch = ((w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum()) # multiply weight for all the jet features and recover the original shape of the features 
+        pt = (j[:, 0:1, :]**2 + j[:, 1:2, :]**2).sqrt()
+        reco_pt = (rec_j[:, 0:1, :]**2 + rec_j[:, 1:2, :]**2).sqrt()
+        mse_loss_batch_pt = F.mse_loss(pt, reco_pt, reduction = 'none')
+
+        mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz, mse_loss_batch_pt], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
+
+        loss_batch = (w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
 
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate * .02 + 0.98*loss_batch.item()
@@ -421,13 +422,13 @@ class Model_AE:
         self.train_valid_offset = train_valid_offset
         self.construct_rel_features = construct_rel_features
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(8, 12, construct_rel_features = self.construct_rel_features)
+        self.network = networks.Basic_CNN_AE(8, 16, construct_rel_features = self.construct_rel_features)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
         self.epoch = 0
         self.lr_current = lr_init
-        self.optimizer = optim.Adam(self.network.parameters(), lr=lr_init, amsgrad=False)
+        self.optimizer = optim.Adam(self.network.parameters(), lr=lr_init, amsgrad=True)
         self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, lr_milestones, gamma=lr_scale, last_epoch=-1)
         self.lr_change = []
         self.bs_change = []
@@ -469,10 +470,10 @@ class Model_AE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, rec_m2j_scaled, m2j, m2j_scaled, rec_m4j, rec_m4j_scaled, m4j, m4j_scaled = self.network(j)
+            rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j,m2j, rec_m4j, m4j = self.network(j)
             #print(rec_m2j_scaled[0])
             
-            result.infer_batch_AE(jPxPyPzE_scaled, rec_jPxPyPzE_scaled, m2j_scaled, rec_m2j_scaled, m4j_scaled, rec_m4j_scaled)
+            result.infer_batch_AE(jPxPyPzE_scaled, rec_jPxPyPzE_scaled)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -502,9 +503,9 @@ class Model_AE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, rec_m2j_scaled, m2j, m2j_scaled, rec_m4j, rec_m4j_scaled, m4j, m4j_scaled = self.network(j)
-            
-            result.train_batch_AE(jPxPyPzE_scaled, rec_jPxPyPzE_scaled, m2j_scaled, rec_m2j_scaled, m4j_scaled, rec_m4j_scaled, w)
+            rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j,m2j, rec_m4j, m4j = self.network(j)
+
+            result.train_batch_AE(jPxPyPzE_scaled, rec_jPxPyPzE_scaled, w)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
@@ -522,13 +523,12 @@ class Model_AE:
         self.bs_change.append(self.epoch)
 
     def run_epoch(self, plot_res):
-        self.epoch += 1
         
+        self.epoch += 1
         self.train()
         self.train_inference()        
         self.valid_inference()
         self.scheduler.step()
-        
 
         if plot_res and self.epoch % 10 == 0:
             total_jPxPyPzE_ = torch.Tensor(())
@@ -537,8 +537,8 @@ class Model_AE:
             total_rec_m2j_ = torch.Tensor(())
             total_m4j_ = torch.Tensor(())
             total_rec_m4j_ = torch.Tensor(())
-            for i, (j_, w_, R_, e_) in enumerate(self.train_result.train_loader):
-                rec_jPxPyPzE_, rec_jPxPyPzE_scaled_, jPxPyPzE_, jPxPyPzE_scaled_, rec_m2j_, rec_m2j_scaled_, m2j_, m2j_scaled_, rec_m4j_, rec_m4j_scaled_, m4j_, m4j_scaled_ = self.network(j_) # forward pass
+            for i, (j_, w_, R_, e_) in enumerate(self.train_result.infer_loader):
+                rec_jPxPyPzE_, rec_jPxPyPzE_scaled_, jPxPyPzE_, jPxPyPzE_scaled_, rec_m2j_, m2j_, rec_m4j_, m4j_ = self.network(j_) # forward pass
 
                 total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
                 total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
@@ -551,27 +551,7 @@ class Model_AE:
             print(total_m2j_[0])
             print(total_rec_m2j_[0])
             plots.plot_training_residuals(total_jPxPyPzE_, total_rec_jPxPyPzE_, total_m2j_, total_rec_m2j_, total_m4j_, total_rec_m4j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample) # plot training residuals for pt, eta, phi
-        
-        '''import matplotlib.pyplot as plt 
-        plt.hist(jPxPyPz_scaled_[:, 0, 0], bins = 12, color = "firebrick")
-        plt.xlim(-2, 14)
-        plt.yscale("log")
-        plt.savefig("px_scaled.pdf")
-        plt.close()
-
-        plt.hist(jPxPyPz_scaled_[:, 1, 0], bins = 12, color = "blue")
-        plt.xlim(-2, 14)
-        plt.yscale("log")
-        plt.savefig("py_scaled.pdf")
-        plt.close()
-
-
-        plt.hist(jPxPyPz_scaled_[:, 2, 0].detach().cpu().numpy(), bins = 12, color = "green")
-        plt.xlim(-2, 14)
-        plt.yscale("log")
-        plt.savefig("pz_scaled.pdf")
-        plt.close()'''
-        
+            plots.plot_PxPyPz(total_jPxPyPzE_, total_rec_jPxPyPzE_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample)
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones or self.epoch in gb_milestones): # and self.network.n_ghost_batches:
             if self.epoch in gb_milestones and self.network.n_ghost_batches:
@@ -586,20 +566,23 @@ class Model_AE:
                 self.lr_change.append(self.epoch)
 
     def run_training(self, plot_res = False):
+        min_val_loss = 999
         self.network.set_mean_std(self.train_result.dataset.tensors[0])
-        
         self.train_inference()
-
         self.valid_inference()
 
         for _ in range(num_epochs):
             self.run_epoch(plot_res = plot_res)
-        self.save_model()
+
+            if val_loss_tosave[-1] < min_val_loss and _ > 0:
+                self.del_prev_model()
+                self.save_model()
+                min_val_loss = val_loss_tosave[-1]
 
         loss = {"train" : train_loss_tosave, "val" : val_loss_tosave}
         with open("loss.txt", 'w') as file:
             file.write(json.dumps(loss))
-        plots.plot_loss(loss, offset = self.train_valid_offset, sample = self.sample)
+        plots.plot_loss(loss, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample)
         
     
     def save_model(self):
@@ -610,8 +593,14 @@ class Model_AE:
                            'epoch': self.epoch,
                            'history': copy(self.history)}
         self.model_pkl = f'models/{self.task}_{self.network.name}_offset_{self.train_valid_offset}_epoch_{self.epoch:03d}.pkl'
-        print(self.model_pkl)
+        print(f'Saved model as: {self.model_pkl} with a validation loss {val_loss_tosave[-1]:.2f}')
         torch.save(self.model_dict, self.model_pkl)
+    
+    def del_prev_model(self):
+        self.prev_models = glob(f'models/{self.task}_{self.network.name}_offset_{self.train_valid_offset}_epoch_*.pkl')
+        for model in self.prev_models:
+            os.remove(model)
+
 
 
 
