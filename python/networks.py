@@ -467,29 +467,30 @@ class Basic_CNN_AE(nn.Module):
         self.decode_j               = nn.ConvTranspose1d(self.d, self.d, 12)
         self.select_dec             = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
 
-
-        self.decode_PxPy            = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 60, device = self.device),
-            nn.PReLU(),
-            nn.Dropout(p = 0.1),
-            #nn.Linear(in_features = 60, out_features = 70, device = self.device),
-            #nn.Dropout(p = 0.1),
-            #nn.Linear(in_features = 70, out_features = 80, device = self.device),
-            #nn.Dropout(p = 0.1),
-            #nn.PReLU(),
-            #nn.Linear(in_features = 80, out_features = 85, device = self.device),
-            #nn.PReLU(),
-            nn.Linear(in_features = 60, out_features = 8, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 2)),
-
-        )
-        self.decode_Pz              = nn.Sequential(
+        self.decode_Pt              = nn.Sequential(
             nn.Flatten(start_dim = 1),
             nn.Linear(in_features = 21, out_features = 20, device = self.device),
             nn.BatchNorm1d(20),
             nn.PReLU(),
-            nn.Dropout(p=0.1),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 20, out_features = 4, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+        )
+        self.decode_Eta              = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 20, device = self.device),
+            nn.BatchNorm1d(20),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 20, out_features = 4, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+        )
+        self.decode_Phi              = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 20, device = self.device),
+            nn.BatchNorm1d(20),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
             nn.Linear(in_features = 20, out_features = 4, device = self.device),
             nn.Unflatten(dim = 1, unflattened_size = (4, 1))
         )
@@ -500,13 +501,13 @@ class Basic_CNN_AE(nn.Module):
             #nn.Dropout(p = 0.2),
             nn.BatchNorm1d(20),
             nn.PReLU(),
-            nn.Dropout(p=0.1),
+            nn.Dropout(p=0.2),
             nn.Linear(in_features = 20, out_features = 4, device = self.device),
             nn.Unflatten(dim = 1, unflattened_size = (4, 1))
         )
 
         '''
-        self.jPxPyPzE_conv          = nn.Sequential(
+        self.j_rotated_conv          = nn.Sequential(
             nn.Conv1d(4, 4, 3, stride = 1),
             nn.ReLU(),
             nn.ConvTranspose1d(4, 4, 3, stride = 1))
@@ -554,10 +555,9 @@ class Basic_CNN_AE(nn.Module):
         m4j = q_rotated[:, 3:4, 0]
 
         # convert to PxPyPzE and compute means and variances
-        jPxPyPzE = PxPyPzE(j_rotated)
-        jPxPyPzE_scaled = jPxPyPzE.clone()
-        batch_mean = jPxPyPzE.mean(dim = (0, 2))
-        batch_std = jPxPyPzE.std(dim = (0, 2))
+        j_scaled = j_rotated.clone()
+        batch_mean = j_rotated.mean(dim = (0, 2))
+        batch_std = j_rotated.std(dim = (0, 2))
         
         '''
 
@@ -579,7 +579,7 @@ class Basic_CNN_AE(nn.Module):
         #print(e[0])
         '''
 
-        e = self.encode(jPxPyPzE[:,0:3,:]) # Energy (=mass) is not used as input
+        e = self.encode(j_rotated[:,0:3,:]) # Energy (=mass) is not used as input
         #print(e.shape)
 
         dec_q = self.decode_q(e)                                                                # dec_q.shape = [batch_size, 8, 3]
@@ -587,25 +587,26 @@ class Basic_CNN_AE(nn.Module):
         dec_j = self.decode_j(e) + NonLU(self.jets_from_dijets(dec_d))                          # dec_j.shape = [batch_size, 8, 12]
         full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
         selected_dec = self.select_dec(full_dec)
-        #rec_Px = self.decode_Px(selected_dec)
-        #rec_Py = self.decode_Py(selected_dec)
-        rec_PxPy = self.decode_PxPy(selected_dec)
-        rec_Pz = self.decode_Pz(selected_dec)
+        rec_Pt = self.decode_Pt(selected_dec)
+        rec_Eta = self.decode_Eta(selected_dec)
+        rec_Phi = self.decode_Phi(selected_dec)
         rec_E = self.decode_E(selected_dec)
         
         
-        rec_jPxPyPzE = torch.cat((rec_PxPy, rec_Pz, rec_E), dim = 2).permute(0,2,1)
-        rec_jPxPyPzE_scaled = rec_jPxPyPzE.clone()
-        for i in range(len(jPxPyPzE[0, :, 0])):
+        rec_j = torch.cat((rec_Pt, rec_Eta, rec_Phi, rec_E), dim = 2).permute(0,2,1)
+        rec_j_scaled = rec_j.clone()
+        for i in range(len(j_rotated[0, :, 0])):
             # obtained a normalized j for the computation of the loss
-            jPxPyPzE_scaled[:, i, :] = (jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
-            rec_jPxPyPzE_scaled[:, i, :] = (rec_jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
+            j_scaled[:, i, :]   =     (j_rotated[:, i, :] - batch_mean[i]) / batch_std[i]
+            rec_j_scaled[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
         
         
-        rec_d, rec_dPxPyPzE = addFourVectors(   PtEtaPhiM(rec_jPxPyPzE)[:,:,(0,2,0,1,0,1)], 
-                                                PtEtaPhiM(rec_jPxPyPzE)[:,:,(1,3,2,3,3,2)])
+        rec_d, rec_dPxPyPzE = addFourVectors(   rec_j[:,:,(0,2,0,1,0,1)], 
+                                                rec_j[:,:,(1,3,2,3,3,2)])
         rec_q, rec_qPxPyPzE = addFourVectors(   rec_d[:,:,(0,2,4)],
-                                                rec_d[:,:,(1,3,5)])
+                                                rec_d[:,:,(1,3,5)],
+                                                v1PxPyPzE = rec_dPxPyPzE[:,:,(0,2,4)],
+                                                v2PxPyPzE = rec_dPxPyPzE[:,:,(1,3,5)])
         rec_m2j = rec_d[:, 3:4, :]
         rec_m4j = rec_q[:, 3:4, 0]
 
@@ -630,7 +631,7 @@ class Basic_CNN_AE(nn.Module):
 
             
         
-        return rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, m2j, rec_m4j, m4j
+        return rec_j, rec_j_scaled, j_rotated, j_scaled, rec_m2j, m2j, rec_m4j, m4j
 
 class K_Fold(nn.Module):
     def __init__(self, models, task = 'FvT'):
@@ -665,9 +666,9 @@ class K_Fold(nn.Module):
                 if self.models[0].construct_rel_features: # check if the models were constructed with relative features
                     rec_j, rec_j_scaled, j_scaled, rel_rec_j, rel_rec_j_scaled, rel_j_scaled = model(j)
                 else:
-                    rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, m2j, rec_m4j, m4j = model(j)
+                    rec_j, rec_j_scaled, j_rotated, j_scaled, rec_m2j, m2j, rec_m4j, m4j = model(j)
 
-            return rec_jPxPyPzE
+            return rec_j
 
 
 
