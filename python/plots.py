@@ -105,7 +105,7 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
     plt.close()
 
 
-def plot_training_residuals(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, offset, epoch, sample): # expects [batch, (3) features, (4) jets] shaped tensors
+def plot_training_residuals(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
@@ -125,18 +125,22 @@ def plot_training_residuals(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, offs
     reco_m4j = rec_m4j.detach()
     res_m4j = reco_m4j - true_m4j
 
+    true_pt = ((true_val[:, 0:1, :]**2 + true_val[:, 1:2, :]**2).sqrt()).detach()
+    reco_pt = ((reco_val[:, 0:1, :]**2 + reco_val[:, 1:2, :]**2).sqrt()).detach()
+    res_pt = true_pt - reco_pt
+
     #cmap = cm.get_cmap("bwr")
     cmap = cm.get_cmap("viridis")
     #cc.cm["CET_L17"].copy()
     
-    fig, ax = plt.subplots(2, 3, figsize = (15, 5))
+    fig, ax = plt.subplots(2, 4, figsize = (15, 5))
     cbar_ax = fig.add_axes([0.96, 0.1, 0.01, 0.8])
     vmax_mob = 0
-    for j, feature in enumerate(["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$E\ ({\\rm GeV)}$", "$m_{2j}\ ({\\rm GeV)}$", "$m_{4j}\ ({\\rm GeV)}$"]):
-        i = 0
-        if j > 2:
-            i = 1
-            j = j - 3
+    i, j = 0, 0
+    for feature in ["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$E\ ({\\rm GeV)}$", "$m_{2j}\ ({\\rm GeV)}$", "$m_{4j}\ ({\\rm GeV)}$", "$p_{T}\ ({\\rm GeV)}$"]:
+        if j > 3:
+            i += 1
+            j -= 4
 
         '''
         Implementation of fast histogram is weird: histogram2d produces a 2d plot that makes NO sense in the confrontation of y vs x (the correlation is lost somehow)
@@ -145,15 +149,12 @@ def plot_training_residuals(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, offs
         im = ax[i].imshow(h.T, cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = h.max()), extent= [*bounds[0], *bounds[1]], aspect = 'auto')
         '''
         
-
-        if i == 0 and j == 1:
+        if i ==0:
             h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
         elif i == 1:
-            h2d, xbins, ybins, im = ax[i, 0].hist2d(true_val[:, 3, :].flatten().numpy(), res[:, 3, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
-            h2d, xbins, ybins, im = ax[i, 1].hist2d(true_m2j[:, :, :].flatten().numpy(), res_m2j[:, :, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
-            h2d, xbins, ybins, im = ax[i, 2].hist2d(true_m4j[:, :].flatten().numpy(), res_m4j[:, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50)) 
-        else:
-            h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+            h2d, xbins, ybins, im = ax[1, 0].hist2d(true_m2j[:, :, :].flatten().numpy(), res_m2j[:, :, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+            h2d, xbins, ybins, im = ax[1, 1].hist2d(true_m4j[:, :].flatten().numpy(), res_m4j[:, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50)) 
+            h2d, xbins, ybins, im = ax[1, 2].hist2d(true_pt.flatten().numpy(), res_pt.flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
 
         ax[i, j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
         ax[i, j].minorticks_on()
@@ -168,16 +169,21 @@ def plot_training_residuals(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, offs
         if h2d.max() > vmax_mob:
             im_vmax = im
             vmax_mob = h2d.max()
+        
+        j+=1
+
+        
+    
     fig.colorbar(im_vmax, cax=cbar_ax)
-    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
+    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
     path = f"plots/autoencoder/residualsPxPyPz_notfms/{sample}/"
     mkpath(path)
-    fig.savefig(f'{path}{sample}_residuals_8_offset_{offset}_epoch_{epoch:03d}.pdf')
+    fig.savefig(f'{path}{sample}_residuals_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
     print(f'Residuals saved to {path}')
     plt.close()
 
-def plot_loss(loss, offset, epoch, sample):
+def plot_loss(loss, offset, epoch, sample, network_name):
     fig, ax = plt.subplots(figsize = (15, 5))
     ax.set_yscale("log")
     ax.plot(loss["train"], color = "r", label = "Train loss")
@@ -189,16 +195,20 @@ def plot_loss(loss, offset, epoch, sample):
     fig.tight_layout()
     path = f"plots/autoencoder/residualsPxPyPz_notfms/{sample}/"
     mkpath(path)
-    fig.savefig(f'{path}{sample}_loss_offset_{offset}_{epoch}epochs.pdf')
+    fig.savefig(f'{path}{sample}_loss_{network_name}_offset_{offset}_{epoch:03d}epochs.pdf')
     print(f'Losses saved to {path}')
     plt.close()
 
-def plot_PxPyPz(true_val, reco_val, offset, epoch, sample):
+def plot_PxPyPzPt(true_val, reco_val, offset, epoch, sample, network_name):
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     #from fast_histogram import histogram2d
+
+    true_pt = ((true_val[:, 0:1, :]**2 + true_val[:, 1:2, :]**2).sqrt()).detach()
+    reco_pt = ((reco_val[:, 0:1, :]**2 + reco_val[:, 1:2, :]**2).sqrt()).detach()
+    res_pt = true_pt - reco_pt
 
     true_val = true_val.detach()
     reco_val = reco_val.detach()
@@ -206,30 +216,40 @@ def plot_PxPyPz(true_val, reco_val, offset, epoch, sample):
     res_norm = res / true_val
 
     width = 20 # GeV
-    nbins = int(round(max(true_val[:, 2, :].flatten().numpy()) - min(true_val[:, 2, :].flatten().numpy())) / width) + 1
-
-    fig, ax = plt.subplots(1, 3, figsize = (15, 5))
-    for j, feature in enumerate(["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$"]):
-        h, bins1, _ = ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
-        ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = bins1)
-
+    fig, ax = plt.subplots(1, 4, figsize = (15, 5))
+    for j, feature in enumerate(["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$p_{T}\ ({\\rm GeV)}$"]):
+        if j == 3:
+            nbins = int(round(max(reco_pt.flatten().numpy()) - min(reco_pt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            h, bins1, _ = ax[j].hist(reco_pt.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+            ax[j].hist(true_pt.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = bins1)
+            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.2f} GeV')
+        else:
+            nbins = int(round(max(reco_val[:, j, :].flatten().numpy()) - min(reco_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            h, bins1, _ = ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+            ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = bins1)
+            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.2f} GeV')
+        
         ax[j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
         ax[j].minorticks_on()
         ax[j].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
 
-        #ax[j].set_yscale("log")
         ax[j].set_xlabel(f'{feature}')
-        ax[j].set_ylabel(f'Events')
+        
     
     #ax[0].hist(true_val[:, 0, :].flatten().numpy() - true_val[:, 1, :].flatten().numpy(), color = "darkorange", label = "px - py", histtype = "step", bins = nbins)
     #ax[0].hist(true_val[:, 0, :].flatten().numpy() + true_val[:, 1, :].flatten().numpy(), color = "forestgreen", label = "px + py", histtype = "step", bins = nbins)
     
+    ax[2].set_yscale("log")
+    ax[3].set_yscale("log")
+    ax[0].set_xlim(-250, 250)
+    ax[1].set_xlim(-250, 250)
+    ax[3].set_xlim(-100, 1000)
     ax[0].legend(loc = "best")
     fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
     path = f"plots/autoencoder/residualsPxPyPz_notfms/{sample}/"
     mkpath(path)
-    fig.savefig(f'{path}{sample}_PxPyPz_{offset}_epoch_{epoch:03d}.pdf')
+    fig.savefig(f'{path}{sample}_PxPyPzPt_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
     print(f'PxPyPz saved to {path}')
     plt.close()
 

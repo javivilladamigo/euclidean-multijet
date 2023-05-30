@@ -239,8 +239,8 @@ def SiLU(x): #SiLU https://arxiv.org/pdf/1702.03118.pdf   Swish https://arxiv.or
 
 
 def NonLU(x): #Pick the default non-Linear Unit
-    #return SiLU(x) # often slightly better performance than standard ReLU
-    return F.relu(x)
+    return SiLU(x) # often slightly better performance than standard ReLU
+    #return F.relu(x)
     #return F.rrelu(x, training=training)
     #return F.leaky_relu(x, negative_slope=0.1)
     #return F.elu(x)
@@ -383,6 +383,54 @@ class Basic_CNN(nn.Module):
 
         return c_logits, q_logits
 
+class Encoder(nn.Module):
+    
+    def __init__(self, in_features, mult_factor, encoded_space_dim):
+        super().__init__()
+        self.encoded_space_dim = encoded_space_dim
+        
+        ### Convolutional section
+        self.encoder_cnn = nn.Sequential(
+            # First convolutional layer
+            nn.Conv1d(in_channels=in_features, out_channels=in_features*mult_factor, kernel_size=2, 
+                      stride=2, padding=1),
+            nn.PReLU(),
+            nn.Dropout(p = 0.1),
+            # Second convolutional layer
+            nn.Conv1d(in_channels=in_features*mult_factor, out_channels=in_features*mult_factor**2, kernel_size=2, 
+                      stride=2, padding=1),
+            nn.BatchNorm1d(in_features*mult_factor**2),
+            nn.PReLU(),
+            # Third convolutional layer
+            nn.Conv1d(in_channels=in_features*mult_factor**2, out_channels=in_features*mult_factor**3, kernel_size=2, 
+                      stride=2, padding=0),
+            nn.PReLU()
+        )
+        
+        ### Flatten layer
+        self.flatten = nn.Flatten(start_dim=1)
+
+        ### Linear section
+        self.encoder_lin = nn.Sequential(
+            # First linear layer
+            nn.Linear(in_features=in_features*mult_factor**3, out_features=in_features*mult_factor**4),
+            nn.BatchNorm1d(in_features*mult_factor**4),
+            nn.PReLU(),
+            nn.Dropout(p = 0.1),
+            # Second linear layer
+            nn.Linear(in_features=in_features*mult_factor**4, out_features=encoded_space_dim)
+        )
+        
+    def forward(self, x):
+        # Apply convolutions
+        x = self.encoder_cnn(x)
+        # Flatten
+        x = self.flatten(x)
+        # # Apply linear layers
+        x = self.encoder_lin(x)
+        x = x.view(-1, self.encoded_space_dim, 1)
+        return x
+
 
 class Basic_CNN_AE(nn.Module):
     def __init__(self, dimension, out_features = 12, device = 'cpu', construct_rel_features = False):
@@ -390,17 +438,18 @@ class Basic_CNN_AE(nn.Module):
         self.device = device
         self.d = dimension
         self.out_features = out_features
-        self.n_ghost_batches = 16
+        self.n_ghost_batches = 0#16
         self.construct_rel_features = construct_rel_features
 
 
         self.name = f'Basic_CNN_AE_{self.d}'
 
-        self.input_embed            = Input_Embed(self.d)
-        self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
-        self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
-        
-        self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+        #self.input_embed            = Input_Embed(self.d)
+        #self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        #self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        #self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+
+        self.encode = Encoder(in_features=3, mult_factor=2, encoded_space_dim=self.d)
         
         # any kind of self.out should convert a [batch_size, 8, 1] into a [batch_size, 16, 1]
         '''self.out_lin = nn.Sequential(
@@ -416,52 +465,47 @@ class Basic_CNN_AE(nn.Module):
         self.decode_d               = nn.ConvTranspose1d(self.d, self.d, 6)
         self.jets_from_dijets       = nn.ConvTranspose1d(self.d, self.d, 2, stride = 2)
         self.decode_j               = nn.ConvTranspose1d(self.d, self.d, 12)
-
         self.select_dec             = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
 
-        self.decode_Px              = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 10, device = self.device),
-            #nn.Dropout(p = 0.2),
-            nn.ReLU(),
-            nn.Linear(in_features = 10, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
-        )
 
-        self.decode_Py              = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
-            #nn.Dropout(p = 0.2),
-            nn.ReLU(),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
-        )
         self.decode_PxPy            = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
-            #nn.Dropout(p = 0.2),
-            nn.ELU(),
-            nn.Linear(in_features = 20, out_features = 8, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 2))
+            nn.Linear(in_features = 21, out_features = 60, device = self.device),
+            nn.PReLU(),
+            nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 60, out_features = 70, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 70, out_features = 80, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.PReLU(),
+            #nn.Linear(in_features = 80, out_features = 85, device = self.device),
+            #nn.PReLU(),
+            nn.Linear(in_features = 60, out_features = 8, device = self.device),
+            nn.Unflatten(dim = 1, unflattened_size = (4, 2)),
+
         )
         self.decode_Pz              = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 10, device = self.device),
-            #nn.Dropout(p = 0.2),
-            nn.ReLU(),
-            nn.Linear(in_features = 10, out_features = 4, device = self.device),
+            nn.Linear(in_features = 21, out_features = 20, device = self.device),
+            nn.BatchNorm1d(20),
+            nn.PReLU(),
+            nn.Dropout(p=0.1),
+            nn.Linear(in_features = 20, out_features = 4, device = self.device),
             nn.Unflatten(dim = 1, unflattened_size = (4, 1))
         )
 
         self.decode_E               = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 10, device = self.device),
+            nn.Linear(in_features = 21, out_features = 20, device = self.device),
             #nn.Dropout(p = 0.2),
-            nn.ReLU(),
-            nn.Linear(in_features = 10, out_features = 4, device = self.device),
+            nn.BatchNorm1d(20),
+            nn.PReLU(),
+            nn.Dropout(p=0.1),
+            nn.Linear(in_features = 20, out_features = 4, device = self.device),
             nn.Unflatten(dim = 1, unflattened_size = (4, 1))
         )
 
+        '''
         self.jPxPyPzE_conv          = nn.Sequential(
             nn.Conv1d(4, 4, 3, stride = 1),
             nn.ReLU(),
@@ -470,13 +514,14 @@ class Basic_CNN_AE(nn.Module):
         self.conv12                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1)
         self.conv13                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1, dilation = 2)
         self.conv14                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1, dilation = 3)
+        '''
 
 
 
 
 
     
-    def set_mean_std(self, j):
+    '''def set_mean_std(self, j):
         self.input_embed.set_mean_std(j)
 
     
@@ -485,11 +530,12 @@ class Basic_CNN_AE(nn.Module):
         self.jets_to_dijets.set_ghost_batches(n_ghost_batches)
         self.dijets_to_quadjets.set_ghost_batches(n_ghost_batches)
         self.select_q.set_ghost_batches(n_ghost_batches)
-        self.n_ghost_batches = n_ghost_batches
+        self.n_ghost_batches = n_ghost_batches'''
 
     
     def forward(self, j):
         # j.shape = [batch_size, 4, 4]
+        #j[torch.all(j[:, 0]>40, axis = 1)] # pt > 30 GeV
         j_rotated = j.clone()
 
         # make leading jet eta positive direction so detector absolute eta info is removed
@@ -512,7 +558,8 @@ class Basic_CNN_AE(nn.Module):
         jPxPyPzE_scaled = jPxPyPzE.clone()
         batch_mean = jPxPyPzE.mean(dim = (0, 2))
         batch_std = jPxPyPzE.std(dim = (0, 2))
-
+        
+        '''
 
 
         
@@ -530,6 +577,10 @@ class Basic_CNN_AE(nn.Module):
         #add together the quadjets with their corresponding probability weight
         e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1]
         #print(e[0])
+        '''
+
+        e = self.encode(jPxPyPzE[:,0:3,:]) # Energy (=mass) is not used as input
+        #print(e.shape)
 
         dec_q = self.decode_q(e)                                                                # dec_q.shape = [batch_size, 8, 3]
         dec_d =  self.decode_d(e) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
@@ -545,7 +596,7 @@ class Basic_CNN_AE(nn.Module):
         
         rec_jPxPyPzE = torch.cat((rec_PxPy, rec_Pz, rec_E), dim = 2).permute(0,2,1)
         rec_jPxPyPzE_scaled = rec_jPxPyPzE.clone()
-        for i in range(len(rec_jPxPyPzE[0, :, 0])):
+        for i in range(len(jPxPyPzE[0, :, 0])):
             # obtained a normalized j for the computation of the loss
             jPxPyPzE_scaled[:, i, :] = (jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
             rec_jPxPyPzE_scaled[:, i, :] = (rec_jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
@@ -614,7 +665,7 @@ class K_Fold(nn.Module):
                 if self.models[0].construct_rel_features: # check if the models were constructed with relative features
                     rec_j, rec_j_scaled, j_scaled, rel_rec_j, rel_rec_j_scaled, rel_j_scaled = model(j)
                 else:
-                    rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, rec_m2j_scaled, m2j, m2j_scaled, rec_m4j, rec_m4j_scaled, m4j, m4j_scaled = model(j)
+                    rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j, m2j, rec_m4j, m4j = model(j)
 
             return rec_jPxPyPzE
 
