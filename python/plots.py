@@ -212,21 +212,19 @@ def plot_PxPyPzPt(true_val, reco_val, offset, epoch, sample, network_name):
 
     true_val = true_val.detach()
     reco_val = reco_val.detach()
-    res = reco_val - true_val
-    res_norm = res / true_val
 
     width = 20 # GeV
     fig, ax = plt.subplots(1, 4, figsize = (15, 5))
     for j, feature in enumerate(["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$p_{T}\ ({\\rm GeV)}$"]):
         if j == 3:
-            nbins = int(round(max(reco_pt.flatten().numpy()) - min(reco_pt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            h, bins1, _ = ax[j].hist(reco_pt.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
-            ax[j].hist(true_pt.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = bins1)
+            nbins = int(round(max(true_pt.flatten().numpy()) - min(true_pt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            h, bins1, _ = ax[j].hist(true_pt.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            ax[j].hist(reco_pt.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
             ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.2f} GeV')
         else:
-            nbins = int(round(max(reco_val[:, j, :].flatten().numpy()) - min(reco_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            h, bins1, _ = ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
-            ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = bins1)
+            nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
             ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.2f} GeV')
         
         ax[j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
@@ -243,7 +241,7 @@ def plot_PxPyPzPt(true_val, reco_val, offset, epoch, sample, network_name):
     ax[3].set_yscale("log")
     ax[0].set_xlim(-250, 250)
     ax[1].set_xlim(-250, 250)
-    ax[3].set_xlim(-100, 1000)
+    #ax[3].set_xlim(-100, 1000)
     ax[0].legend(loc = "best")
     fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')

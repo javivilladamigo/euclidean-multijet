@@ -152,46 +152,27 @@ class Loader_Result:
 
     def eval(self):
         self.n_done = 0
-        
-    def infer_batch(self, c_logits, q_logits, y, w, R, e):
-        n_batch = c_logits.shape[0]
-        #sys.stdout.write(f'\nn_batch shape = {n_batch}\n')
-        # y_pred_batch = F.softmax(c_logits, dim=-1)
-        #torch.save(c_logits, f"python/c_logits_{task}.pkl")
-        #torch.save(y, f"python/y_{task}.pkl")
-        cross_entropy_batch = F.cross_entropy(c_logits, y, reduction='none')
-        #sys.stdout.write(f'\nCross entropy computed\n')
-        #torch.save(cross_entropy_batch, f"python/cross_entropy_batch_{task}.pkl")
-        #sys.stdout.write(f'\nExiting...\n'); sys.exit()
-        self.cross_entropy[self.n_done:self.n_done+n_batch] = cross_entropy_batch
-        self.n_done += n_batch
 
     def infer_batch_AE(self, j, rec_j): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
         
-        #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        #l1_loss_batch = F.l1_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         
-        mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
-        mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_E = F.mse_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        
-        pt = (j[:, 0:1, :]**2 + j[:, 1:2, :]**2).sqrt()
-        reco_pt = (rec_j[:, 0:1, :]**2 + rec_j[:, 1:2, :]**2).sqrt()
-        mse_loss_batch_pt = F.mse_loss(pt, reco_pt, reduction = 'none')
+        l1_loss_batch_Pt = F.l1_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        l1_loss_batch_Eta = F.l1_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Eta of leading jet because it is always 0 when phi_lead = 0
+        l1_loss_batch_Phi = F.l1_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        l1_loss_batch_E = F.l1_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+
+        l1_loss_batch = torch.cat([l1_loss_batch_Pt, l1_loss_batch_Eta, l1_loss_batch_Phi, l1_loss_batch_E], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Pt losses + 3 Eta losses + 4 Phi losses + 6 m2j losses + 1 m4j loss)
 
 
-        mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz, mse_loss_batch_E, mse_loss_batch_pt], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
+
+        l1_loss_batch = torch.cat([l1_loss_batch_Pt, l1_loss_batch_Eta, l1_loss_batch_Phi, l1_loss_batch_E], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Pt losses + 3 Eta losses + 4 Phi losses + 6 m2j losses + 1 m4j loss)
     
-        assert mse_loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and mse_loss_batch shapes mismatch"
+        assert l1_loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and l1_loss_batch shapes mismatch"
 
-        self.decoding_loss[self.n_done : self.n_done + n_batch] = mse_loss_batch
+        self.decoding_loss[self.n_done : self.n_done + n_batch] = l1_loss_batch
         self.n_done += n_batch
-
-    def infer_done(self):
-        self.loss = (self.w * self.cross_entropy).sum()/self.w_sum/self.loaded_die_loss
-        self.history['loss'].append(copy(self.loss))
-        self.n_done = 0
     
     def infer_done_AE(self):
 
@@ -200,39 +181,18 @@ class Loader_Result:
         train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
         self.n_done = 0 
 
-
-    def train_batch(self, c_logits, q_logits, y, w, R, e):
-        if self.task=='FvT':
-            isSB = (R==1) # mask SR events in training, we can keep them in inference for now, though with real data this would be a bad idea
-            w_isSB = w[isSB]
-            w_isSB_sum = w_isSB.sum()
-            cross_entropy_batch = F.cross_entropy(c_logits[isSB], y[isSB], reduction='none')
-            loss_batch = (w_isSB * cross_entropy_batch).sum()/w_isSB_sum/self.loaded_die_loss
-        
-        if self.task=='SvB':
-            w_sum = w.sum()
-            cross_entropy_batch = F.cross_entropy(c_logits, y, reduction='none')
-            loss_batch = (w * cross_entropy_batch).sum()/w_sum/self.loaded_die_loss
-            
-        loss_batch.backward()
-        self.loss_estimate = self.loss_estimate*0.98 + loss_batch.item()*(1-0.98) # running average with 0.98 exponential decay rate
-
     def train_batch_AE(self, j, rec_j, w): # expecting same sized j and rec_j
 
-        #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none')
+        #l1_loss_batch = F.l1_loss(j, rec_j, reduction = 'none')
         
-        mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
-        mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_E = F.mse_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        l1_loss_batch_Pt = F.l1_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        l1_loss_batch_Eta = F.l1_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Eta of leading jet because it is always 0 when phi_lead = 0
+        l1_loss_batch_Phi = F.l1_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        l1_loss_batch_E = F.l1_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
 
-        pt = (j[:, 0:1, :]**2 + j[:, 1:2, :]**2).sqrt()
-        reco_pt = (rec_j[:, 0:1, :]**2 + rec_j[:, 1:2, :]**2).sqrt()
-        mse_loss_batch_pt = F.mse_loss(pt, reco_pt, reduction = 'none')
+        l1_loss_batch = torch.cat([l1_loss_batch_Pt, l1_loss_batch_Eta, l1_loss_batch_Phi, l1_loss_batch_E], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Pt losses + 3 Eta losses + 4 Phi losses + 6 m2j losses + 1 m4j loss)
 
-        mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz, mse_loss_batch_E, mse_loss_batch_pt], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
-
-        loss_batch = (w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
+        loss_batch = (w * l1_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
 
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate * .02 + 0.98*loss_batch.item()
@@ -473,10 +433,10 @@ class Model_AE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j,m2j, rec_m4j, m4j = self.network(j)
+            rec_j, rec_j_scaled, j, j_scaled, rec_m2j,m2j, rec_m4j, m4j = self.network(j)
             #print(rec_m2j_scaled[0])
             
-            result.infer_batch_AE(jPxPyPzE_scaled, rec_jPxPyPzE_scaled)
+            result.infer_batch_AE(j_scaled, rec_j_scaled)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -506,9 +466,9 @@ class Model_AE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            rec_jPxPyPzE, rec_jPxPyPzE_scaled, jPxPyPzE, jPxPyPzE_scaled, rec_m2j,m2j, rec_m4j, m4j = self.network(j)
+            rec_j, rec_j_scaled, j, j_scaled, rec_m2j,m2j, rec_m4j, m4j = self.network(j)
 
-            result.train_batch_AE(jPxPyPzE_scaled, rec_jPxPyPzE_scaled, w)
+            result.train_batch_AE(j_scaled, rec_j_scaled, w)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
@@ -535,14 +495,14 @@ class Model_AE:
         self.scheduler.step()
 
         if plot_res and self.epoch % 20 == 0:
-            total_jPxPyPzE_ = torch.Tensor(())
-            total_rec_jPxPyPzE_ = torch.Tensor(())
+            total_j_ = torch.Tensor(())
+            total_rec_j_ = torch.Tensor(())
             total_m2j_ = torch.Tensor(())
             total_rec_m2j_ = torch.Tensor(())
             total_m4j_ = torch.Tensor(())
             total_rec_m4j_ = torch.Tensor(())
             for i, (j_, w_, R_, e_) in enumerate(self.train_result.infer_loader):
-                rec_jPxPyPzE_, rec_jPxPyPzE_scaled_, jPxPyPzE_, jPxPyPzE_scaled_, rec_m2j_, m2j_, rec_m4j_, m4j_ = self.network(j_) # forward pass
+                rec_j_, rec_j_scaled_, j_, j_scaled_, rec_m2j_, m2j_, rec_m4j_, m4j_ = self.network(j_) # forward pass
 
                 total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
                 total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
@@ -550,12 +510,12 @@ class Model_AE:
                 total_m4j_ = torch.cat((total_m4j_, m4j_), 0)
                 total_rec_m4j_ = torch.cat((total_rec_m4j_, rec_m4j_), 0)
 
-                total_jPxPyPzE_ = torch.cat((total_jPxPyPzE_, jPxPyPzE_), 0)
-                total_rec_jPxPyPzE_ = torch.cat((total_rec_jPxPyPzE_, rec_jPxPyPzE_), 0)
+                total_j_ = torch.cat((total_j_, j_), 0)
+                total_rec_j_ = torch.cat((total_rec_j_, rec_j_), 0)
             print(total_m2j_[0])
             print(total_rec_m2j_[0])
-            plots.plot_training_residuals(total_jPxPyPzE_, total_rec_jPxPyPzE_, total_m2j_, total_rec_m2j_, total_m4j_, total_rec_m4j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
-            plots.plot_PxPyPzPt(total_jPxPyPzE_, total_rec_jPxPyPzE_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_training_residuals(total_j_, total_rec_j_, total_m2j_, total_rec_m2j_, total_m4j_, total_rec_m4j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
+            plots.plot_PtEtaPhiPt(total_j_, total_rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones or self.epoch in gb_milestones): # and self.network.n_ghost_batches:
             if self.epoch in gb_milestones and self.network.n_ghost_batches:
