@@ -90,7 +90,7 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 Architecture hyperparameters
 '''
 num_epochs = 500
-lr_init  = 0.01
+lr_init  = 0.001
 lr_scale = 0.5
 bs_scale = 2
 
@@ -169,16 +169,16 @@ class Loader_Result:
     def infer_batch_AE(self, j, rec_j): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
         
-        #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        #mse_loss_batch = F.l1_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         
-        mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
-        mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_E = F.mse_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        mse_loss_batch_Px = F.l1_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        mse_loss_batch_Py = F.l1_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
+        mse_loss_batch_Pz = F.l1_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        mse_loss_batch_E = F.l1_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         
         pt = (j[:, 0:1, :]**2 + j[:, 1:2, :]**2).sqrt()
         reco_pt = (rec_j[:, 0:1, :]**2 + rec_j[:, 1:2, :]**2).sqrt()
-        mse_loss_batch_pt = F.mse_loss(pt, reco_pt, reduction = 'none')
+        mse_loss_batch_pt = F.l1_loss(pt, reco_pt, reduction = 'none')
 
 
         mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz, mse_loss_batch_E, mse_loss_batch_pt], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
@@ -219,16 +219,16 @@ class Loader_Result:
 
     def train_batch_AE(self, j, rec_j, w): # expecting same sized j and rec_j
 
-        #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none')
+        #mse_loss_batch = F.l1_loss(j, rec_j, reduction = 'none')
         
-        mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
-        mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_E = F.mse_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        mse_loss_batch_Px = F.l1_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        mse_loss_batch_Py = F.l1_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
+        mse_loss_batch_Pz = F.l1_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        mse_loss_batch_E = F.l1_loss(j[:, 3:4, :], rec_j[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
 
         pt = (j[:, 0:1, :]**2 + j[:, 1:2, :]**2).sqrt()
         reco_pt = (rec_j[:, 0:1, :]**2 + rec_j[:, 1:2, :]**2).sqrt()
-        mse_loss_batch_pt = F.mse_loss(pt, reco_pt, reduction = 'none')
+        mse_loss_batch_pt = F.l1_loss(pt, reco_pt, reduction = 'none')
 
         mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz, mse_loss_batch_E, mse_loss_batch_pt], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Px losses + 3 Py losses + 4 Pz losses + 6 m2j losses + 1 m4j loss)
 
