@@ -89,7 +89,7 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
-num_epochs = 500
+num_epochs = 20
 lr_init  = 0.01
 lr_scale = 0.5
 bs_scale = 2
@@ -140,7 +140,7 @@ class Loader_Result:
         self.w = dataset.tensors[1] if model.task == 'dec' else dataset.tensors[2]
         self.w_sum = self.w.sum()
         self.cross_entropy = torch.zeros(self.n)
-        self.decoding_loss = torch.zeros(self.n, 1, 12)  # [batch_size, nb_of_features, effective_nb_of_jets]
+        self.decoding_loss = torch.zeros(self.n, 3, 4)  # [batch_size, nb_of_features, effective_nb_of_jets]
                                                         # nb_of_features is the number of features reconstructed (i.e. how many features from [pt, eta, phi, mass])
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
         self.n_done = 0
@@ -149,243 +149,87 @@ class Loader_Result:
         self.history = {'loss': []}
         self.task = model.task
         self.train = train
+                # for the gaussian likelihood
+        self.log_scale = torch.nn.Parameter(torch.Tensor(3*[[0.0]])) # 4 features per jet
+        
+    def gaussian_likelihood(self, j, logscale, rec_j):
+        scale = torch.exp(logscale)
+        dist = torch.distributions.Normal(rec_j, scale)
+
+        # measure prob of seeing jets under p(rec_j|z)
+        log_pxz = dist.log_prob(j)
+        return log_pxz
+
+    def kl_divergence(self, z, mu, std):
+        # --------------------------
+        # Monte carlo KL divergence
+        # --------------------------
+        # 1. define the first two probabilities (in this case Normal for both)
+        p = torch.distributions.Normal(torch.zeros_like(mu), torch.ones_like(std))
+        q = torch.distributions.Normal(mu, std)
+
+        # 2. get the probabilities from the equation
+        log_qzx = q.log_prob(z)
+        log_pz = p.log_prob(z)
+
+        # kl
+        kl = (log_qzx - log_pz)
+        kl = kl.sum(dim = (1,2)) # kl has to be a scalar
+        return kl
 
     def eval(self):
         self.n_done = 0
 
-    def infer_batch_AE(self, j, rec_j): # expecting same sized j and rec_j
+    def infer_batch_VAE(self, j, rec_j, z, mu, std): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
-        
-        #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        
-        mse_loss_batch_Pt = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Eta = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Eta of leading jet because it is always 0 when phi_lead = 0
-        mse_loss_batch_Phi = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_E = F.mse_loss(networks.PxPyPzE(j)[:, 3:4, :], networks.PxPyPzE(rec_j)[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
 
-        mse_loss_batch = torch.cat([mse_loss_batch_Pt, mse_loss_batch_Eta, mse_loss_batch_Phi], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Pt losses + 3 Eta losses + 4 Phi losses + 6 m2j losses + 1 m4j loss)
+        # reconstruction loss
+        reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j) # [batch_size, 4, 4]
 
+        # kl loss
+        kl_loss_batch = self.kl_divergence(z, mu, std) # [batch_size]
 
-
-        mse_loss_batch = torch.cat([mse_loss_batch_Pt, mse_loss_batch_Eta, mse_loss_batch_Phi], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Pt losses + 3 Eta losses + 4 Phi losses + 6 m2j losses + 1 m4j loss)
+        # elbo
+        elbo_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
     
-        assert mse_loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and mse_loss_batch shapes mismatch"
+        assert elbo_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and elbo_batch shapes mismatch"
 
-        self.decoding_loss[self.n_done : self.n_done + n_batch] = mse_loss_batch
+        self.decoding_loss[self.n_done : self.n_done + n_batch] = elbo_batch
         self.n_done += n_batch
     
-    def infer_done_AE(self):
-
+    def infer_done_VAE(self):
         self.loss = (self.w * self.decoding_loss.permute(1,2,0)).permute(2,0,1).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
         self.history['loss'].append(copy(self.loss))
         train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
         self.n_done = 0 
 
-    def train_batch_AE(self, j, rec_j, w): # expecting same sized j and rec_j
+    def train_batch_VAE(self, j, rec_j, z, mu, std, w): # expecting same sized j and rec_j
 
-        #mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none')
-        
-        mse_loss_batch_Pt = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Eta = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Eta of leading jet because it is always 0 when phi_lead = 0
-        mse_loss_batch_Phi = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_E = F.mse_loss(networks.PxPyPzE(j)[:, 3:4, :], networks.PxPyPzE(rec_j)[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
+        # reconstruction loss
+        reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j)
 
-        mse_loss_batch = torch.cat([mse_loss_batch_Pt, mse_loss_batch_Eta, mse_loss_batch_Phi], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Pt losses + 3 Eta losses + 4 Phi losses + 6 m2j losses + 1 m4j loss)
+        # kl loss
+        kl_loss_batch = self.kl_divergence(z, mu, std)
 
-        loss_batch = (w * mse_loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
+        # elbo
+        elbo_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
+
+        loss_batch = (w * elbo_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
 
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate * .02 + 0.98*loss_batch.item()
 
 
-
-'''
-Model used for classification
-'''
-class Model:
-    def __init__(self, train_valid_offset=0, device='cpu', task='FvT', model_file=''): # FvT == Four vs Threetag classification
-        self.task = task
-        self.device = device
-        self.train_valid_offset = train_valid_offset
-        self.network = networks.Basic_CNN(8)
-        self.network.to(self.device)
-        n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
-        print(f'Network has {n_trainable_parameters} trainable parameters')
-        self.epoch = 0
-        self.lr_current = lr_init
-        self.optimizer = optim.Adam(self.network.parameters(), lr=lr_init, amsgrad=False)
-        self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, lr_milestones, gamma=lr_scale, last_epoch=-1)
-        self.lr_change = []
-        self.bs_change = []
-
-        if model_file:
-            print(f'Load {model_file}')
-            model_name_parts = re.split(r'[/_]', model_file)
-            self.task = model_name_parts[1]
-            self.train_valid_offset = model_name_parts[model_name_parts.index('offset')+1]
-            self.model_pkl = model_file
-            self.model_dict = torch.load(self.model_pkl)
-            self.network.load_state_dict(self.model_dict['model'])
-            self.optimizer.load_state_dict(self.model_dict['optimizer'])
-            self.epoch = self.model_dict['epoch']
-        
-    def make_loaders(self, event):
-        
-        if task == 'FvT':
-            wd4 = sum(event[event.d4].weight)
-            wd3 = sum(event[event.d3].weight)
-            w   = sum(event.weight)
-            fC = torch.FloatTensor([wd4/w, wd3/w])
-            # compute the loss you would get if you only used the class fraction to predict class probability (ie an n_class sided die loaded to land with the right fraction on each class)
-            self.loaded_die_loss = -(fC*fC.log()).sum()
-
-        # let's assume that the loaded_die_loss can be computed in a similar fashion for the case of SvB
-        if task == 'SvB':
-            wS  = sum(event[event.S].weight)
-            wBG = sum(event[event.BG].weight)
-
-            w   = sum(event.weight)
-            fC = torch.FloatTensor([wS/w, wBG/w])
-
-            self.loaded_die_loss = -(fC*fC.log()).sum() 
-
-        # Split into training and validation sets and format into pytorch tensors
-        valid = event.event%train_valid_modulus == self.train_valid_offset
-        train = ~valid
-
-        dataset_train = coffea_to_tensor(event[train], device=self.device)
-        dataset_valid = coffea_to_tensor(event[valid], device=self.device)
-
-        self.train_result = Loader_Result(self, dataset_train, train=True)
-        self.valid_result = Loader_Result(self, dataset_valid)
-
-        print(f'{self.train_result.n:,} training samples split into {len(self.train_result.train_loader):,} batches of {train_batch_size:,}')
-
-
-    @torch.no_grad()
-    def inference(self, result):
-        self.network.eval()
-        #sys.stdout.write('\nnetwork.eval() done\n')
-
-        for i, (j, y, w, R, e) in enumerate(result.infer_loader):
-
-            
-
-            c_logits, q_logits = self.network(j)
-
-            #sys.stdout.write(f'\nc_logits, q_logits shape = {c_logits.shape}, {q_logits.shape}\n')
-            #sys.stdout.write(f'\ny, w, R, e shapes= {y.shape, w.shape, R.shape, e.shape}\n')
-
-            result.infer_batch(c_logits, q_logits, y, w, R, e)
-
-            #sys.stdout.write(f'\nresult.infer_batch(c_logits, q_logits, y, w, R, e) = {result.infer_batch(c_logits, q_logits, y, w, R, e)}\n')
-
-            percent = float(i+1)*100/len(result.infer_loader)
-            sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
-            sys.stdout.flush()
-
-        result.infer_done()
-
-    def train_inference(self):
-
-        #sys.stdout.write('\nEntering train_inference()\n')
-
-        self.inference(self.train_result)
-
-        sys.stdout.write(' '*SCREEN_WIDTH)
-        sys.stdout.flush()
-        print('\r',end='')
-        print(f'\nEpoch {self.epoch:>2} | Training | Loss {self.train_result.loss:1.5}')
-
-    def valid_inference(self):
-        self.inference(self.valid_result)
-        sys.stdout.write(' '*SCREEN_WIDTH)
-        sys.stdout.flush()
-        print('\r',end='')
-        print(f'         | Validation | Loss {self.valid_result.loss:1.5}')
-
-    def train(self, result=None):
-        if result is None: result = self.train_result
-        self.network.train()
-
-        for i, (j, y, w, R, e) in enumerate(result.train_loader):
-            self.optimizer.zero_grad()
-            c_logits, q_logits = self.network(j)
-            result.train_batch(c_logits, q_logits, y, w, R, e)
-
-            percent = float(i+1)*100/len(result.train_loader)
-            sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
-            sys.stdout.flush()
-
-            self.optimizer.step()
-
-    def increment_train_loader(self, new_batch_size=None):
-        current_batch_size = self.train_result.train_loader.batch_size
-        if new_batch_size is None: new_batch_size = current_batch_size*bs_scale
-        if new_batch_size == current_batch_size: return
-        print(f'Change training batch size: {current_batch_size} -> {new_batch_size} ({self.train_result.n//new_batch_size} batches)')
-        del self.train_result.train_loader
-        self.train_result.train_loader = DataLoader(dataset=self.train_result.dataset, batch_size=new_batch_size, shuffle=True,  num_workers=num_workers, pin_memory=True, drop_last=True)
-        self.bs_change.append(self.epoch)
-            
-    def run_epoch(self):
-        self.epoch += 1
-        self.train()
-        self.train_inference()
-        self.valid_inference()
-        self.scheduler.step()
-        if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
-            gb_decay = 4 #2 if self.epoch in bs_mile
-            print(f'set_ghost_batches({self.network.n_ghost_batches//gb_decay})')
-            self.network.set_ghost_batches(self.network.n_ghost_batches//gb_decay)
-        if self.epoch in bs_milestones:
-            self.increment_train_loader()
-        if self.epoch in lr_milestones:
-            print(f'Decay learning rate: {self.lr_current} -> {self.lr_current*lr_scale}')
-            self.lr_current *= lr_scale
-            self.lr_change.append(self.epoch)
-
-    def run_training(self):
-        self.network.set_mean_std(self.train_result.dataset.tensors[0])
-        
-        #sys.stdout.write('\nMean and standard deviations set\n')
-        
-        self.train_inference()
-
-        #sys.stdout.write('\ntrain_inference() done\n')
-
-        self.valid_inference()
-
-        #sys.stdout.write('\nvalid_inference() done\n')
-
-        for _ in range(num_epochs):
-            self.run_epoch()
-        self.save_model()
-
-    def save_model(self):
-        self.history = {'train': self.train_result.history,
-                        'valid': self.valid_result.history}
-        self.model_dict = {'model': deepcopy(self.network.state_dict()),
-                           'optimizer': deepcopy(self.optimizer.state_dict()),
-                           'epoch': self.epoch,
-                           'history': copy(self.history)}
-        self.model_pkl = f'models/{self.task}_{self.network.name}_offset_{self.train_valid_offset}_epoch_{self.epoch:03d}.pkl'
-        print(self.model_pkl)
-        torch.save(self.model_dict, self.model_pkl)
-
-
-
 '''
 Model used for autoencoding
 '''
-class Model_AE:
-    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = '', construct_rel_features = False, sample = ''):
+class Model_VAE:
+    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = '', sample = ''):
         self.task = task
         self.device = device
         self.train_valid_offset = train_valid_offset
-        self.construct_rel_features = construct_rel_features
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(10, 12, construct_rel_features = self.construct_rel_features)
+        self.network = networks.VAE(latent_dim = 8, out_features = 12, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -433,16 +277,16 @@ class Model_AE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            rec_j, rec_j_scaled, j, j_scaled, rec_m2j,m2j, rec_m4j, m4j = self.network(j)
-            #print(rec_m2j_scaled[0])
+            j_sc, rec_j, rec_j_sc, z, mu, std = self.network(j)
+
             
-            result.infer_batch_AE(j_scaled, rec_j_scaled)
+            result.infer_batch_VAE(j_sc[:,0:3,:], rec_j_sc[:,0:3,:], z, mu, std)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
             sys.stdout.flush()
 
-        result.infer_done_AE()
+        result.infer_done_VAE()
 
 
     def train_inference(self):
@@ -466,9 +310,9 @@ class Model_AE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            rec_j, rec_j_scaled, j, j_scaled, rec_m2j,m2j, rec_m4j, m4j = self.network(j)
+            j_sc, rec_j, rec_j_sc, z, mu, std = self.network(j)
 
-            result.train_batch_AE(j_scaled, rec_j_scaled, w)
+            result.train_batch_VAE(j_sc[:,0:3,:], rec_j_sc[:,0:3,:], z, mu, std, w)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
@@ -494,27 +338,29 @@ class Model_AE:
         self.valid_inference()
         self.scheduler.step()
 
-        if plot_res and self.epoch % 20 == 0:
+        if plot_res and self.epoch % 1 == 0:
             total_j_ = torch.Tensor(())
             total_rec_j_ = torch.Tensor(())
             total_m2j_ = torch.Tensor(())
             total_rec_m2j_ = torch.Tensor(())
             total_m4j_ = torch.Tensor(())
             total_rec_m4j_ = torch.Tensor(())
+            total_z_ = torch.Tensor(())
             for i, (j_, w_, R_, e_) in enumerate(self.train_result.infer_loader):
-                rec_j_, rec_j_scaled_, j_, j_scaled_, rec_m2j_, m2j_, rec_m4j_, m4j_ = self.network(j_) # forward pass
-
+                j_sc, rec_j_, rec_j_sc_, z_, mu, std = self.network(j_) # forward pass
+                '''
                 total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
                 total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
 
                 total_m4j_ = torch.cat((total_m4j_, m4j_), 0)
                 total_rec_m4j_ = torch.cat((total_rec_m4j_, rec_m4j_), 0)
-
+                '''
+                total_z_ = torch.cat((total_z_, z_), 0)
                 total_j_ = torch.cat((total_j_, j_), 0)
                 total_rec_j_ = torch.cat((total_rec_j_, rec_j_), 0)
-            print(total_m2j_[0])
-            print(total_rec_m2j_[0])
-            plots.plot_training_residuals_PtEtaPhiEm2jm4j(total_j_, total_rec_j_, total_m2j_, total_rec_m2j_, total_m4j_, total_rec_m4j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
+            print(total_z_[0])
+            #print(total_rec_m2j_[0])
+            plots.plot_training_residuals_VAE(total_j_, total_rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
             plots.plot_PtEtaPhiE(total_j_, total_rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones or self.epoch in gb_milestones): # and self.network.n_ghost_batches:
@@ -540,11 +386,12 @@ class Model_AE:
         
         for _ in range(num_epochs):
             self.run_epoch(plot_res = plot_res)
-
+            '''
             for name, weight in self.network.named_parameters():
                 
-                tb.add_histogram(name,weight, self.epoch)
+                tb.add_histogram(name, weight, self.epoch)
                 tb.add_histogram(f'{name}.grad',weight.grad, self.epoch)
+            '''
             
             tb.add_scalar("Train loss", train_loss_tosave[-1], self.epoch)
             tb.add_scalar("Val loss", val_loss_tosave[-1], self.epoch)
@@ -690,7 +537,7 @@ if __name__ == '__main__':
             # Load model and run training
             model_args = {  'task': task,
                             'train_valid_offset': args.offset}
-            t=Model_AE(**model_args, construct_rel_features = False, sample = sample)
+            t=Model_VAE(**model_args, sample = sample)
             t.make_loaders(event)
             t.run_training(plot_res = True)
 
