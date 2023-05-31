@@ -559,10 +559,8 @@ class Basic_CNN_AE(nn.Module):
         batch_mean = j_rotated.mean(dim = (0, 2))
         batch_std = j_rotated.std(dim = (0, 2))
         
-        '''
-
-
         
+        '''
         # j_rotated.shape = [batch_size, 4, 4]
         j, d, q = self.input_embed(j_rotated)                                                   # j.shape = [batch_size, 8, 12]
                                                                                                 # d.shape = [batch_size, 8, 6]

@@ -89,7 +89,7 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
-num_epochs = 1
+num_epochs = 500
 lr_init  = 0.01
 lr_scale = 0.5
 bs_scale = 2
@@ -163,7 +163,7 @@ class Loader_Result:
         mse_loss_batch_Phi = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
         mse_loss_batch_E = F.mse_loss(networks.PxPyPzE(j)[:, 3:4, :], networks.PxPyPzE(rec_j)[:, 3:4, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
 
-        mse_loss_batch = torch.cat([mse_loss_batch_Pt, mse_loss_batch_Eta, mse_loss_batch_Phi, mse_loss_batch_E], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Pt losses + 3 Eta losses + 4 Phi losses + 6 m2j losses + 1 m4j loss)
+        mse_loss_batch = torch.cat([mse_loss_batch_Pt, mse_loss_batch_Eta, mse_loss_batch_Phi], dim = 2) # after concatenating obtain a [batch x 1 x 18] (4 Pt losses + 3 Eta losses + 4 Phi losses + 6 m2j losses + 1 m4j loss)
 
 
 
@@ -385,7 +385,7 @@ class Model_AE:
         self.train_valid_offset = train_valid_offset
         self.construct_rel_features = construct_rel_features
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(10, 16, construct_rel_features = self.construct_rel_features)
+        self.network = networks.Basic_CNN_AE(10, 12, construct_rel_features = self.construct_rel_features)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -494,7 +494,7 @@ class Model_AE:
         self.valid_inference()
         self.scheduler.step()
 
-        if plot_res and self.epoch % 1 == 0:
+        if plot_res and self.epoch % 20 == 0:
             total_j_ = torch.Tensor(())
             total_rec_j_ = torch.Tensor(())
             total_m2j_ = torch.Tensor(())
