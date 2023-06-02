@@ -662,40 +662,39 @@ class VAE(nn.Module):
 
         self.decode_Pt              = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
-            nn.BatchNorm1d(20),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
             nn.PReLU(),
             nn.Dropout(p=0.2),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.ELU(),
         )
         self.decode_Eta             = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
-            nn.BatchNorm1d(20),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
             nn.PReLU(),
             nn.Dropout(p=0.2),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.Hardtanh(min_val = -2.6, max_val = 2.6)
+
         )
         self.decode_Phi             = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
-            nn.BatchNorm1d(20),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
             nn.PReLU(),
             nn.Dropout(p=0.2),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
         )
         self.decode_M               = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
             #nn.Dropout(p = 0.2),
-            nn.BatchNorm1d(20),
+            nn.BatchNorm1d(100),
             nn.PReLU(),
             nn.Dropout(p=0.2),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
         )
 
 
@@ -739,10 +738,11 @@ class VAE(nn.Module):
 
         # sample z from Q(z|x)
         std = torch.exp(log_var / 2)
-        Q = torch.distributions.Normal(mu, std)
-        z = Q.rsample()
-        z = z.view(-1, self.d, 1)                                                               # recover [batch_dim, 8, 1] for decoding
+        #Q = torch.distributions.Normal(mu, std)
+        #z = Q.rsample()
         mu, std = mu.view(-1, self.d, 1), std.view(-1, self.d, 1)
+        z = mu + std
+        #z = z.view(-1, self.d, 1)                                                          # recover [batch_dim, 8, 1] for decoding
 
         dec_q = self.decode_q(z)                                                                # dec_q.shape = [batch_size, 8, 3]
         dec_d =  self.decode_d(z) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
@@ -750,13 +750,14 @@ class VAE(nn.Module):
         full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
         selected_dec = self.select_dec(full_dec)
         
-        rec_Pt = self.decode_Pt(selected_dec)
-        rec_Eta = self.decode_Eta(selected_dec)
-        rec_Phi = self.decode_Phi(selected_dec)
-        rec_M = self.decode_M(selected_dec)
+        rec_Pt = self.decode_Pt(selected_dec).view(-1, 1, 4)
+        rec_Eta = self.decode_Eta(selected_dec).view(-1, 1, 4)
+        rec_Phi = torch.pi * torch.sin(self.decode_Phi(selected_dec).view(-1, 1, 4))
+        rec_M = self.decode_M(selected_dec).view(-1, 1, 4)
+
 
         #rec_j = (self.simple_dec3(self.simple_dec2(self.simple_dec1(selected_dec)))).view(-1, 4, 4)
-        rec_j = torch.cat((rec_Pt, rec_Eta, rec_Phi, rec_M), dim = 2)
+        rec_j = torch.cat((rec_Pt, rec_Eta, rec_Phi), dim = 1)
 
 
         # normalization for loss

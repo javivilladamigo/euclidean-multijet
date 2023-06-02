@@ -335,15 +335,38 @@ def plot_training_residuals_VAE(true_val, reco_val, offset, epoch, sample, netwo
     plt.close()
 
 
+def plot_lossVAE(loss, offset, epoch, sample, network_name):
+    fig, ax = plt.subplots(figsize = (15, 5))
+    ax.set_yscale("log")
+    ax.plot(loss["train"]["total"], color = "r", label = "Train loss")
+    ax.plot(loss["train"]["kl"], color = "r", linestyle = "dashed", label = "Train kl loss")
+    ax.plot(loss["train"]["reco"], color = "r", linestyle = "dashdot", label = "Train reco loss")
+    ax.plot(loss["val"]["total"], color = "b", label = "Val loss")
+    ax.plot(loss["val"]["kl"], color = "b", linestyle = "dashed", label = "Val kl loss")
+    ax.plot(loss["val"]["reco"], color = "b", linestyle = "dashdot", label = "Val reco loss")
+
+    ax.legend(loc = "best")
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss')
+    ax.set_xticks(np.arange(0, len(loss["train"]["total"]) + 1, len(loss["train"]["total"]) // 20)) if len(loss["train"]["total"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]["total"]) + 1, 2))
+    fig.tight_layout()
+    path = f"plots/VAE/residualsPtEtaPhi_notfms/{sample}/"
+    mkpath(path)
+    fig.savefig(f'{path}{sample}_loss_{network_name}_offset_{offset}_{epoch:03d}epochs.pdf')
+    print(f'Losses saved to {path}')
+    plt.close()
+
+
 def plot_loss(loss, offset, epoch, sample, network_name):
     fig, ax = plt.subplots(figsize = (15, 5))
     ax.set_yscale("log")
     ax.plot(loss["train"], color = "r", label = "Train loss")
     ax.plot(loss["val"], color = "b", label = "Val loss")
+
     ax.legend(loc = "best")
     ax.set_xlabel('Epoch')
-    ax.set_xticks(np.arange(0, len(loss["train"]) + 1, len(loss["train"]) // 20)) if len(loss["train"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]) + 1, 2))
     ax.set_ylabel('Loss')
+    ax.set_xticks(np.arange(0, len(loss["train"]) + 1, len(loss["train"]) // 20)) if len(loss["train"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]) + 1, 2))
     fig.tight_layout()
     path = f"plots/VAE/residualsPtEtaPhi_notfms/{sample}/"
     mkpath(path)
@@ -410,8 +433,8 @@ def plot_PtEtaPhiE(true_val, reco_val, offset, epoch, sample, network_name):
     import matplotlib.cm as cm
     #from fast_histogram import histogram2d
 
-    true_E = (networks.PxPyPzE(true_val)[:, 3:4, :]).detach()
-    reco_E = (networks.PxPyPzE(reco_val)[:, 3:4, :]).detach()
+    #true_E = (networks.PxPyPzE(true_val)[:, 3:4, :]).detach()
+    #reco_E = (networks.PxPyPzE(reco_val)[:, 3:4, :]).detach()
 
     true_val = true_val.detach()
     reco_val = reco_val.detach()
@@ -420,19 +443,20 @@ def plot_PtEtaPhiE(true_val, reco_val, offset, epoch, sample, network_name):
     fig, ax = plt.subplots(1, 4, figsize = (15, 5))
     for j, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$", "$E\ ({\\rm GeV)}$"]):
         if j == 3:
-            width = 20 # GeV
-            nbins = int(round(max(true_E.flatten().numpy()) - min(true_E.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            h, bins1, _ = ax[j].hist(true_E.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
-            ax[j].hist(reco_E.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
-            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
-            ax[j].set_yscale("log")
+            continue
+            #width = 20 # GeV
+            #nbins = int(round(max(true_E.flatten().numpy()) - min(true_E.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            #h, bins1, _ = ax[j].hist(true_E.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            #ax[j].hist(reco_E.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+            #ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+            #ax[j].set_yscale("log")
         else:
             width = 20 if j == 0 else 0.25
             nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
             h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
-            ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+            ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
 
-            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV') if j == 0 else ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.2f}')
+            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV') if j == 0 else ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f}')
             
         
         ax[j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)

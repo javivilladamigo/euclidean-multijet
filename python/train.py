@@ -90,7 +90,7 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 Architecture hyperparameters
 '''
 num_epochs = 20
-lr_init  = 0.01
+lr_init  = 0.001
 lr_scale = 0.5
 bs_scale = 2
 
@@ -184,14 +184,14 @@ class Loader_Result:
         n_batch = rec_j.shape[0]
 
         # reconstruction loss
-        reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j) # [batch_size, 4, 4]
+        #reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j) # [batch_size, 4, 4]
 
         # kl loss
-        kl_loss_batch = self.kl_divergence(z, mu, std) # [batch_size]
+        #kl_loss_batch = self.kl_divergence(z, mu, std) # [batch_size]
 
         # elbo
-        elbo_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
-    
+        #elbo_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
+        elbo_batch = F.mse_loss(j, rec_j, reduction = 'none')
         assert elbo_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and elbo_batch shapes mismatch"
 
         self.decoding_loss[self.n_done : self.n_done + n_batch] = elbo_batch
@@ -206,14 +206,14 @@ class Loader_Result:
     def train_batch_VAE(self, j, rec_j, z, mu, std, w): # expecting same sized j and rec_j
 
         # reconstruction loss
-        reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j)
+        #reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j) # [batch_size, 4, 4]
 
         # kl loss
-        kl_loss_batch = self.kl_divergence(z, mu, std)
+        #kl_loss_batch = self.kl_divergence(z, mu, std) # [batch_size]
 
         # elbo
-        elbo_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
-
+        #elbo_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
+        elbo_batch = F.mse_loss(j, rec_j, reduction = 'none')
         loss_batch = (w * elbo_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
 
         loss_batch.backward()
@@ -360,8 +360,8 @@ class Model_VAE:
                 total_rec_j_ = torch.cat((total_rec_j_, rec_j_), 0)
             print(total_z_[0])
             #print(total_rec_m2j_[0])
-            plots.plot_training_residuals_VAE(total_j_, total_rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
-            plots.plot_PtEtaPhiE(total_j_, total_rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_training_residuals_VAE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
+            plots.plot_PtEtaPhiE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones or self.epoch in gb_milestones): # and self.network.n_ghost_batches:
             if self.epoch in gb_milestones and self.network.n_ghost_batches:
