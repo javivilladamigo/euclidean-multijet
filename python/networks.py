@@ -632,13 +632,13 @@ class Basic_CNN_AE(nn.Module):
         return rec_j, rec_j_sc, j_rot, j_sc, rec_m2j, m2j, rec_m4j, m4j
 
 class VAE(nn.Module):
-    def __init__(self, latent_dim, out_features, device = 'cpu'):
+    def __init__(self, latent_dim, device = 'cpu'):
         super().__init__()
         self.device = device
         self.d = latent_dim
         self.enc_out_dim = self.d * 2
         self.n_ghost_batches = 0#16
-        self.out_features = out_features
+
         self.name = f'VAE_{self.d}'
 
 
@@ -667,7 +667,6 @@ class VAE(nn.Module):
             nn.PReLU(),
             nn.Dropout(p=0.2),
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
-            nn.ELU(),
         )
         self.decode_Eta             = nn.Sequential(
             nn.Flatten(start_dim = 1),
@@ -676,7 +675,7 @@ class VAE(nn.Module):
             nn.PReLU(),
             nn.Dropout(p=0.2),
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
-            nn.Hardtanh(min_val = -2.6, max_val = 2.6)
+            nn.Tanh()
 
         )
         self.decode_Phi             = nn.Sequential(
@@ -686,6 +685,7 @@ class VAE(nn.Module):
             nn.PReLU(),
             nn.Dropout(p=0.2),
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.Sigmoid()
         )
         self.decode_M               = nn.Sequential(
             nn.Flatten(start_dim = 1),
@@ -724,11 +724,6 @@ class VAE(nn.Module):
         m2j = d_rot[:, 3:4, :]
         m4j = q_rot[:, 3:4, 0]
 
-        # convert to PxPyPzE and compute means and variances
-        j_sc = j_rot.clone()
-        batch_mean = j_rot.mean(dim = (0, 2))
-        batch_std = j_rot.std(dim = (0, 2))
-
 
         e = self.encoder(j_rot[:,0:3,:]) # Energy (=mass) is not used as input
         e = e.view(-1, self.enc_out_dim)                                                       # [batch_dim, enc_out_dim, 1] --> [batch_dim, enc_out_dim] (typically enc_out_dim = 16)
@@ -750,16 +745,23 @@ class VAE(nn.Module):
         full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
         selected_dec = self.select_dec(full_dec)
         
-        rec_Pt = self.decode_Pt(selected_dec).view(-1, 1, 4)
-        rec_Eta = self.decode_Eta(selected_dec).view(-1, 1, 4)
-        rec_Phi = torch.pi * torch.sin(self.decode_Phi(selected_dec).view(-1, 1, 4))
-        rec_M = self.decode_M(selected_dec).view(-1, 1, 4)
+        rec_Pt = torch.exp(self.decode_Pt(selected_dec).view(-1, 1, 4))
+        rec_Eta = 3.5 * self.decode_Eta(selected_dec).view(-1, 1, 4)
+        #rec_M = self.decode_M(selected_dec).view(-1, 1, 4)
+        
+
+        rec_Phi = torch.pi *(1-2*self.decode_Phi)
+
+
+
+
 
 
         #rec_j = (self.simple_dec3(self.simple_dec2(self.simple_dec1(selected_dec)))).view(-1, 4, 4)
         rec_j = torch.cat((rec_Pt, rec_Eta, rec_Phi), dim = 1)
 
 
+        '''
         # normalization for loss
         rec_j_sc = rec_j.clone()
         for i in range(len(rec_j[0, :, 0])):
@@ -768,7 +770,7 @@ class VAE(nn.Module):
             rec_j_sc[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
 
 
-        '''
+
         e = self.encode(j_rot[:,0:3,:]) # Energy (=mass) is not used as input
         #print(e.shape)
 
@@ -820,7 +822,7 @@ class VAE(nn.Module):
         '''
             
         
-        return j_sc, rec_j, rec_j_sc, z, mu, std
+        return rec_j, z, mu, std
 
 class K_Fold(nn.Module):
     def __init__(self, models, task = 'FvT'):

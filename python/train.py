@@ -140,6 +140,9 @@ class Loader_Result:
         self.w = dataset.tensors[1] if model.task == 'dec' else dataset.tensors[2]
         self.w_sum = self.w.sum()
         self.cross_entropy = torch.zeros(self.n)
+        self.loss_Pt = torch.zeros(self.n)
+        self.loss_Eta = torch.zeros(self.n)
+        self.loss_Phi = torch.zeros(self.n)
         self.decoding_loss = torch.zeros(self.n, 3, 4)  # [batch_size, nb_of_features, effective_nb_of_jets]
                                                         # nb_of_features is the number of features reconstructed (i.e. how many features from [pt, eta, phi, mass])
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
@@ -190,20 +193,46 @@ class Loader_Result:
         #kl_loss_batch = self.kl_divergence(z, mu, std) # [batch_size]
 
         # elbo
-        #elbo_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
-        elbo_batch = F.mse_loss(j, rec_j, reduction = 'none')
-        assert elbo_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and elbo_batch shapes mismatch"
+        #loss_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
+        
+        # pt
+        rec_pt_mean = rec_j.mean(dim=0)[0:1,:]; rec_pt_std = rec_j.std(dim=0)[0:1,:]
+        pt_mean = j.mean(dim=0)[0:1,:]; pt_std = j.std(dim=0)[0:1,:]
+        #                       rec_pt norm                                                 pt norm
+        dPt = torch.log(rec_j[:,0:1,:]) - torch.log(j[:,0:1,:])
+        #dPt = (dPt - dPt.mean(dim = 0)) / dPt.std(dim=0)
 
-        self.decoding_loss[self.n_done : self.n_done + n_batch] = elbo_batch
+        
+
+        # (th)eta
+        dEta = rec_j[:,1:2,:] - j[:,1:2,:]
+        theta = 2 * torch.atan(torch.exp(-j[:,1:2,:]))
+        rec_theta = 2 * torch.atan(torch.exp(-rec_j[:,1:2,:]))
+        dTheta = theta - rec_theta
+
+        # phi
+        #dPhi = networks.calcDeltaPhi(rec_j, j)
+        chi = -torch.log(torch.atan((j[:,2:3,:]+torch.pi) / 2))
+        rec_chi = -torch.log(torch.atan((rec_j[:,2:3,:]+torch.pi) / 2))
+        dPhi = torch.log(rec_chi) - torch.log(chi)
+
+
+        loss_batch = torch.cat((torch.abs(dPt), torch.abs(dEta)**2,  torch.abs(dPhi)), dim = 1)
+        #import sys; sys.exit()
+        assert loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and loss_batch shapes mismatch"
+
+        self.decoding_loss[self.n_done : self.n_done + n_batch] = loss_batch
         self.n_done += n_batch
     
     def infer_done_VAE(self):
+        print("\nMean infer loss:", self.decoding_loss.mean(dim=0))
         self.loss = (self.w * self.decoding_loss.permute(1,2,0)).permute(2,0,1).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
         self.history['loss'].append(copy(self.loss))
         train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
         self.n_done = 0 
 
     def train_batch_VAE(self, j, rec_j, z, mu, std, w): # expecting same sized j and rec_j
+        
 
         # reconstruction loss
         #reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j) # [batch_size, 4, 4]
@@ -212,9 +241,29 @@ class Loader_Result:
         #kl_loss_batch = self.kl_divergence(z, mu, std) # [batch_size]
 
         # elbo
-        #elbo_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
-        elbo_batch = F.mse_loss(j, rec_j, reduction = 'none')
-        loss_batch = (w * elbo_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
+        #loss_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
+        
+        # pt
+        rec_pt_mean = rec_j.mean(dim=0)[0:1,:]; rec_pt_std = rec_j.std(dim=0)[0:1,:]
+        pt_mean = j.mean(dim=0)[0:1,:]; pt_std = j.std(dim=0)[0:1,:]
+        #                       rec_pt norm                                                 pt norm
+        dPt = torch.log(rec_j[:,0:1,:]) - torch.log(j[:,0:1,:])
+
+        # (th)eta
+        dEta = rec_j[:,1:2,:] - j[:,1:2,:]
+        theta = 2 * torch.atan(torch.exp(-j[:,1:2,:]))
+        rec_theta = 2 * torch.atan(torch.exp(-rec_j[:,1:2,:]))
+        dTheta = theta - rec_theta
+
+        #dPhi = networks.calcDeltaPhi(rec_j, j)
+        chi = -torch.log(torch.atan((j[:,2:3,:]+torch.pi) / 2))
+        rec_chi = -torch.log(torch.atan((rec_j[:,2:3,:]+torch.pi) / 2))
+        dPhi = torch.log(rec_chi) - torch.log(chi)
+
+        loss_batch = torch.cat((torch.abs(dPt), torch.abs(dEta)**2,  torch.abs(dPhi)), dim = 1)
+        
+        assert loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and loss_batch shapes mismatch"
+        loss_batch = (w * loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
 
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate * .02 + 0.98*loss_batch.item()
@@ -229,7 +278,7 @@ class Model_VAE:
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.sample = sample
-        self.network = networks.VAE(latent_dim = 8, out_features = 12, device = self.device)
+        self.network = networks.VAE(latent_dim = 8, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -277,10 +326,10 @@ class Model_VAE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            j_sc, rec_j, rec_j_sc, z, mu, std = self.network(j)
+            rec_j, z, mu, std = self.network(j)
 
             
-            result.infer_batch_VAE(j_sc[:,0:3,:], rec_j_sc[:,0:3,:], z, mu, std)
+            result.infer_batch_VAE(j[:,0:3,:], rec_j[:,0:3,:], z, mu, std, )
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -310,15 +359,15 @@ class Model_VAE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            j_sc, rec_j, rec_j_sc, z, mu, std = self.network(j)
+            rec_j, z, mu, std = self.network(j)
 
-            result.train_batch_VAE(j_sc[:,0:3,:], rec_j_sc[:,0:3,:], z, mu, std, w)
+            result.train_batch_VAE(j[:,0:3,:], rec_j[:,0:3,:], z, mu, std, w)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
             sys.stdout.flush()
-
             self.optimizer.step()
+        result.loss_estimate = 0
 
     def increment_train_loader(self, new_batch_size = None):
         current_batch_size = self.train_result.train_loader.batch_size
@@ -347,7 +396,7 @@ class Model_VAE:
             total_rec_m4j_ = torch.Tensor(())
             total_z_ = torch.Tensor(())
             for i, (j_, w_, R_, e_) in enumerate(self.train_result.infer_loader):
-                j_sc, rec_j_, rec_j_sc_, z_, mu, std = self.network(j_) # forward pass
+                rec_j_, z_, mu_, std_ = self.network(j_) # forward pass
                 '''
                 total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
                 total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
@@ -358,7 +407,7 @@ class Model_VAE:
                 total_z_ = torch.cat((total_z_, z_), 0)
                 total_j_ = torch.cat((total_j_, j_), 0)
                 total_rec_j_ = torch.cat((total_rec_j_, rec_j_), 0)
-            print(total_z_[0])
+            print("z:", total_z_[0, :, 0])
             #print(total_rec_m2j_[0])
             plots.plot_training_residuals_VAE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
             plots.plot_PtEtaPhiE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
@@ -407,7 +456,7 @@ class Model_VAE:
                 print(f'Val loss has not decreased in 20 epoch. Decay learning rate: {self.lr_current} -> {self.lr_current*lr_scale}')
                 self.lr_current *= lr_scale
                 self.lr_change.append(self.epoch)
-            if val_loss_increase_counter == 50: #or min_val_loss < 1.:
+            if val_loss_increase_counter == 100: #or min_val_loss < 1.:
                 break
 
         tb.flush()

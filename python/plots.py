@@ -472,7 +472,7 @@ def plot_PtEtaPhiE(true_val, reco_val, offset, epoch, sample, network_name):
     path = f"plots/VAE/residualsPtEtaPhi_notfms/{sample}/"
     mkpath(path)
     fig.savefig(f'{path}{sample}_PtEtaPhiE_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
-    print(f'PxPyPz saved to {path}')
+    print(f'PtEtaPhi saved to {path}')
     plt.close()
 
 
