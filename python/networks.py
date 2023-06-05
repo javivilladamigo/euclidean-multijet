@@ -640,8 +640,7 @@ class VAE(nn.Module):
         self.n_ghost_batches = 0#16
 
         self.name = f'VAE_{self.d}'
-
-
+        
         # encoder path
         self.encoder = Encoder(in_features=3, mult_factor=2, encoded_space_dim = self.enc_out_dim)
 
@@ -667,6 +666,7 @@ class VAE(nn.Module):
             nn.PReLU(),
             nn.Dropout(p=0.2),
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.Sigmoid()
         )
         self.decode_Eta             = nn.Sequential(
             nn.Flatten(start_dim = 1),
@@ -685,7 +685,7 @@ class VAE(nn.Module):
             nn.PReLU(),
             nn.Dropout(p=0.2),
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
-            nn.Sigmoid()
+            nn.Hardtanh(min_val=-torch.pi, max_val=torch.pi)
         )
         self.decode_M               = nn.Sequential(
             nn.Flatten(start_dim = 1),
@@ -696,6 +696,14 @@ class VAE(nn.Module):
             nn.Dropout(p=0.2),
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
         )
+
+        self.w_l = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(self.d, 2)
+        )
+        self.lweight = 0
+        self.rweight = 0
+
 
 
 
@@ -738,6 +746,8 @@ class VAE(nn.Module):
         mu, std = mu.view(-1, self.d, 1), std.view(-1, self.d, 1)
         z = mu + std
         #z = z.view(-1, self.d, 1)                                                          # recover [batch_dim, 8, 1] for decoding
+        self.lweight = torch.sigmoid(self.w_l(z)[:,0])
+        self.rweight = 1-self.lweight
 
         dec_q = self.decode_q(z)                                                                # dec_q.shape = [batch_size, 8, 3]
         dec_d =  self.decode_d(z) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
@@ -745,12 +755,12 @@ class VAE(nn.Module):
         full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
         selected_dec = self.select_dec(full_dec)
         
-        rec_Pt = torch.exp(self.decode_Pt(selected_dec).view(-1, 1, 4))
-        rec_Eta = 3.5 * self.decode_Eta(selected_dec).view(-1, 1, 4)
+        rec_Pt = torch.exp(2.5+ 5*self.decode_Pt(selected_dec).view(-1, 1, 4))
+        rec_Eta = 4 * self.decode_Eta(selected_dec).view(-1, 1, 4)
         #rec_M = self.decode_M(selected_dec).view(-1, 1, 4)
         
 
-        rec_Phi = torch.pi *(1-2*self.decode_Phi)
+        rec_Phi = self.decode_Phi(selected_dec).view(-1, 1, 4)
 
 
 
@@ -822,7 +832,7 @@ class VAE(nn.Module):
         '''
             
         
-        return rec_j, z, mu, std
+        return rec_j, z, mu, std, self.lweight, self.rweight
 
 class K_Fold(nn.Module):
     def __init__(self, models, task = 'FvT'):

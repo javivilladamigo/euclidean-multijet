@@ -89,13 +89,19 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
-num_epochs = 20
+testing = False
+if testing:
+    num_epochs = 20
+    plot_every = 1
+else:
+    num_epochs = 500
+    plot_every = 20
 lr_init  = 0.001
 lr_scale = 0.5
 bs_scale = 2
 
-bs_milestones =     [50, 80, 200, 275]
-lr_milestones =     [50, 80, 200, 250, 300, 400, 450]
+bs_milestones =     [50, 100, 200, 275]
+lr_milestones =     [50, 100, 200, 250, 300, 400, 450]
 gb_milestones =     [5, 7, 10, 15, 20, 30, 40, 50, 100, 150, 200]
 
 train_batch_size = 2**9
@@ -143,6 +149,10 @@ class Loader_Result:
         self.loss_Pt = torch.zeros(self.n)
         self.loss_Eta = torch.zeros(self.n)
         self.loss_Phi = torch.zeros(self.n)
+        self.rec_theta_ = torch.zeros(self.n, 1, 4)
+        self.theta_ = torch.zeros(self.n, 1, 4)
+        self.logpt_ = torch.zeros(self.n, 1, 4)
+        self.rec_logpt_ = torch.zeros(self.n, 1, 4)
         self.decoding_loss = torch.zeros(self.n, 3, 4)  # [batch_size, nb_of_features, effective_nb_of_jets]
                                                         # nb_of_features is the number of features reconstructed (i.e. how many features from [pt, eta, phi, mass])
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
@@ -153,7 +163,7 @@ class Loader_Result:
         self.task = model.task
         self.train = train
                 # for the gaussian likelihood
-        self.log_scale = torch.nn.Parameter(torch.Tensor(3*[[0.0]])) # 4 features per jet
+        
         
     def gaussian_likelihood(self, j, logscale, rec_j):
         scale = torch.exp(logscale)
@@ -183,88 +193,82 @@ class Loader_Result:
     def eval(self):
         self.n_done = 0
 
-    def infer_batch_VAE(self, j, rec_j, z, mu, std): # expecting same sized j and rec_j
-        n_batch = rec_j.shape[0]
+    def loss_fn(self, j, rec_j):
 
-        # reconstruction loss
-        #reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j) # [batch_size, 4, 4]
-
-        # kl loss
-        #kl_loss_batch = self.kl_divergence(z, mu, std) # [batch_size]
-
-        # elbo
-        #loss_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
-        
         # pt
-        rec_pt_mean = rec_j.mean(dim=0)[0:1,:]; rec_pt_std = rec_j.std(dim=0)[0:1,:]
-        pt_mean = j.mean(dim=0)[0:1,:]; pt_std = j.std(dim=0)[0:1,:]
-        #                       rec_pt norm                                                 pt norm
-        dPt = torch.log(rec_j[:,0:1,:]) - torch.log(j[:,0:1,:])
-        #dPt = (dPt - dPt.mean(dim = 0)) / dPt.std(dim=0)
-
+        rec_logpt_mean = torch.log(rec_j[:,0:1,:]).median(dim=0).values; rec_logpt_std = torch.log(rec_j[:,0:1,:]).std(dim=0)
+        logpt_mean = torch.log(j[:,0:1,:]).median(dim=0).values; logpt_std = torch.log(j[:,0:1,:]).std(dim=0)
+        logpt = (torch.log(j[:,0:1,:]))
+        rec_logpt = (torch.log(rec_j[:,0:1,:]))
         
+        med_threshold = logpt.median(dim=0).values
+        tail_threshold = 500
+        med_mask = ((logpt > med_threshold) & (j[:,0:1,:] < tail_threshold)).float()  # create a mask of elements below threshold
+        tail_mask = (j[:,0:1,:] > tail_threshold).float()
+        mask_glob = ((logpt > med_threshold)).float()  # create a mask of elements below threshold
+        med_loss = torch.abs(rec_logpt - logpt) * 1.8 # element-wise logarithmic loss
+        tail_loss = torch.abs(rec_logpt - logpt) * 0.8
+        l1_loss = torch.abs(rec_logpt - logpt) # element-wise squared loss
+
+        #dPt = med_mask * med_loss + tail_mask * tail_loss + (1 - mask_glob) * l1_loss  # apply mask to combine the losses
+        logpt_weights = ((logpt - logpt.mean(dim=0)) / logpt.std(dim=0))**2 - logpt.min(dim=0).values
+        dPt = (rec_logpt - logpt) * (logpt_weights + 0.9)
+
 
         # (th)eta
-        dEta = rec_j[:,1:2,:] - j[:,1:2,:]
+        eta_weights = ((j[:,1:2,:] - j[:,1:2,:].mean(dim=0)) / j[:,1:2,:].std(dim=0))**2
+        dEta = (rec_j[:,1:2,:] - j[:,1:2,:]) * (eta_weights+1)
         theta = 2 * torch.atan(torch.exp(-j[:,1:2,:]))
+        theta_mean = theta.mean(dim=0)
+        theta_std = theta.std(dim=0)
         rec_theta = 2 * torch.atan(torch.exp(-rec_j[:,1:2,:]))
-        dTheta = theta - rec_theta
+        
+        threshold = 1.8
+        mask_l = (j[:,1:2,:] < -threshold).float()
+        mask_r = (j[:,1:2,:] >  threshold).float()
+        mask = ((j[:,1:2,:] >  threshold) | (j[:,1:2,:] < -threshold)).float() # combined
+        loss_l = torch.exp(-j[:,1:2,:]) - torch.exp(-rec_j[:,1:2,:])
+        loss_r = torch.exp(j[:,1:2,:]) - torch.exp(rec_j[:,1:2,:])
+        
+        squared_loss = (rec_theta - theta)**2
+        #dTheta = mask_r * 2 * loss_r + mask_l * 2 * loss_l + (1 - mask) * squared_loss
+        dTheta = (rec_theta-theta) * (eta_weights + 1)
+        # maybe implement here a factor 3 for theta > 2.8 and theta < 0.3, and turn the 1.8 into a ~1 (corresponds to theta < 0.6 and theta > 2.4)
+        # factor 1.1 cos (theta) is the best performer so far
+        
 
-        # phi
         #dPhi = networks.calcDeltaPhi(rec_j, j)
-        chi = -torch.log(torch.atan((j[:,2:3,:]+torch.pi) / 2))
-        rec_chi = -torch.log(torch.atan((rec_j[:,2:3,:]+torch.pi) / 2))
-        dPhi = torch.log(rec_chi) - torch.log(chi)
+        chi = torch.exp(-j[:,2:3,:]-torch.pi)
+        rec_chi = torch.exp(-rec_j[:,2:3,:]-torch.pi)
+        dPhi = rec_j[:,2:3,:] - j[:,2:3,:]
 
+        loss_batch = torch.cat((torch.abs(dPt), torch.abs(dTheta),  torch.abs(dPhi)), dim = 1)
+        return loss_batch, rec_theta, theta
 
-        loss_batch = torch.cat((torch.abs(dPt), torch.abs(dEta)**2,  torch.abs(dPhi)), dim = 1)
-        #import sys; sys.exit()
+    def infer_batch_VAE(self, j, rec_j, z, mu, std, lweight, rweight): # expecting same sized j and rec_j
+        n_batch = rec_j.shape[0]
+        loss_batch, rec_theta, theta = self.loss_fn(j, rec_j)
+
         assert loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and loss_batch shapes mismatch"
-
         self.decoding_loss[self.n_done : self.n_done + n_batch] = loss_batch
+        self.rec_theta_[self.n_done : self.n_done + n_batch] = rec_theta
+        self.theta_[self.n_done : self.n_done + n_batch] = theta
+        self.logpt_[self.n_done : self.n_done + n_batch] = torch.log(j[:,0:1,:])
+        self.rec_logpt_[self.n_done : self.n_done + n_batch] = torch.log(rec_j[:,0:1,:])
         self.n_done += n_batch
     
     def infer_done_VAE(self):
-        print("\nMean infer loss:", self.decoding_loss.mean(dim=0))
+        print("\nMean infer loss:", self.decoding_loss.mean(dim=0).data)
         self.loss = (self.w * self.decoding_loss.permute(1,2,0)).permute(2,0,1).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
         self.history['loss'].append(copy(self.loss))
         train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
-        self.n_done = 0 
+        self.n_done = 0
 
-    def train_batch_VAE(self, j, rec_j, z, mu, std, w): # expecting same sized j and rec_j
-        
+    def train_batch_VAE(self, j, rec_j, z, mu, std, lweight, rweight, w): # expecting same sized j and rec_j
 
-        # reconstruction loss
-        #reco_loss_batch = self.gaussian_likelihood(j, self.log_scale, rec_j) # [batch_size, 4, 4]
+        loss_batch, _, _ = self.loss_fn(j, rec_j)
 
-        # kl loss
-        #kl_loss_batch = self.kl_divergence(z, mu, std) # [batch_size]
-
-        # elbo
-        #loss_batch = (kl_loss_batch - reco_loss_batch.permute(1,2,0)).permute(2,0,1)
-        
-        # pt
-        rec_pt_mean = rec_j.mean(dim=0)[0:1,:]; rec_pt_std = rec_j.std(dim=0)[0:1,:]
-        pt_mean = j.mean(dim=0)[0:1,:]; pt_std = j.std(dim=0)[0:1,:]
-        #                       rec_pt norm                                                 pt norm
-        dPt = torch.log(rec_j[:,0:1,:]) - torch.log(j[:,0:1,:])
-
-        # (th)eta
-        dEta = rec_j[:,1:2,:] - j[:,1:2,:]
-        theta = 2 * torch.atan(torch.exp(-j[:,1:2,:]))
-        rec_theta = 2 * torch.atan(torch.exp(-rec_j[:,1:2,:]))
-        dTheta = theta - rec_theta
-
-        #dPhi = networks.calcDeltaPhi(rec_j, j)
-        chi = -torch.log(torch.atan((j[:,2:3,:]+torch.pi) / 2))
-        rec_chi = -torch.log(torch.atan((rec_j[:,2:3,:]+torch.pi) / 2))
-        dPhi = torch.log(rec_chi) - torch.log(chi)
-
-        loss_batch = torch.cat((torch.abs(dPt), torch.abs(dEta)**2,  torch.abs(dPhi)), dim = 1)
-        
-        assert loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and loss_batch shapes mismatch"
         loss_batch = (w * loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
-
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate * .02 + 0.98*loss_batch.item()
 
@@ -326,10 +330,10 @@ class Model_VAE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            rec_j, z, mu, std = self.network(j)
+            rec_j, z, mu, std, lweight, rweight = self.network(j)
 
             
-            result.infer_batch_VAE(j[:,0:3,:], rec_j[:,0:3,:], z, mu, std, )
+            result.infer_batch_VAE(j[:,0:3,:], rec_j[:,0:3,:], z, mu, std, lweight, rweight)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -359,9 +363,9 @@ class Model_VAE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            rec_j, z, mu, std = self.network(j)
+            rec_j, z, mu, std, lweight, rweight = self.network(j)
 
-            result.train_batch_VAE(j[:,0:3,:], rec_j[:,0:3,:], z, mu, std, w)
+            result.train_batch_VAE(j[:,0:3,:], rec_j[:,0:3,:], z, mu, std, lweight, rweight, w)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
@@ -387,16 +391,19 @@ class Model_VAE:
         self.valid_inference()
         self.scheduler.step()
 
-        if plot_res and self.epoch % 1 == 0:
+        if plot_res and self.epoch % plot_every == 0:
             total_j_ = torch.Tensor(())
             total_rec_j_ = torch.Tensor(())
             total_m2j_ = torch.Tensor(())
             total_rec_m2j_ = torch.Tensor(())
             total_m4j_ = torch.Tensor(())
             total_rec_m4j_ = torch.Tensor(())
+            total_lweight_ = torch.Tensor(())
+            total_rweight_ = torch.Tensor(())
+
             total_z_ = torch.Tensor(())
             for i, (j_, w_, R_, e_) in enumerate(self.train_result.infer_loader):
-                rec_j_, z_, mu_, std_ = self.network(j_) # forward pass
+                rec_j_, z_, mu_, std_, lweight_, rweight_ = self.network(j_) # forward pass
                 '''
                 total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
                 total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
@@ -407,10 +414,15 @@ class Model_VAE:
                 total_z_ = torch.cat((total_z_, z_), 0)
                 total_j_ = torch.cat((total_j_, j_), 0)
                 total_rec_j_ = torch.cat((total_rec_j_, rec_j_), 0)
-            print("z:", total_z_[0, :, 0])
+                #total_lweight_ = torch.cat((total_lweight_, lweight_), 0)
+                #total_rweight_ = torch.cat((total_rweight_, rweight_), 0)
+
+
+            print("z:", total_z_[0, :, 0].data)
+            #print("avg lweight:", total_lweight_.mean(dim=0), "avg rweight:", total_rweight_.mean(dim=0))
             #print(total_rec_m2j_[0])
             plots.plot_training_residuals_VAE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
-            plots.plot_PtEtaPhiE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_PtEtaPhiE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], self.valid_result.theta_, self.valid_result.rec_theta_, self.valid_result.logpt_, self.valid_result.rec_logpt_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones or self.epoch in gb_milestones): # and self.network.n_ghost_batches:
             if self.epoch in gb_milestones and self.network.n_ghost_batches:
@@ -452,7 +464,7 @@ class Model_VAE:
             else:
                 val_loss_increase_counter += 1
             
-            if val_loss_increase_counter == 20:
+            if val_loss_increase_counter == 20 or val_loss_increase_counter == 40 or val_loss_increase_counter == 60 or val_loss_increase_counter == 80:
                 print(f'Val loss has not decreased in 20 epoch. Decay learning rate: {self.lr_current} -> {self.lr_current*lr_scale}')
                 self.lr_current *= lr_scale
                 self.lr_change.append(self.epoch)

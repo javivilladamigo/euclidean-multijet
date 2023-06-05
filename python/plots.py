@@ -323,8 +323,6 @@ def plot_training_residuals_VAE(true_val, reco_val, offset, epoch, sample, netwo
         
         j+=1
 
-        
-    
     fig.colorbar(im_vmax, cax=cbar_ax)
     fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
@@ -426,7 +424,7 @@ def plot_PxPyPzPt(true_val, reco_val, offset, epoch, sample, network_name):
     print(f'PxPyPz saved to {path}')
     plt.close()
 
-def plot_PtEtaPhiE(true_val, reco_val, offset, epoch, sample, network_name):
+def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, offset, epoch, sample, network_name):
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
@@ -438,22 +436,36 @@ def plot_PtEtaPhiE(true_val, reco_val, offset, epoch, sample, network_name):
 
     true_val = true_val.detach()
     reco_val = reco_val.detach()
+    
+    true_theta = theta.detach()
+    reco_theta = rec_theta.detach()
+
+    true_logpt = logpt.detach()
+    reco_logpt = rec_logpt.detach()
 
     
-    fig, ax = plt.subplots(1, 4, figsize = (15, 5))
-    for j, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$", "$E\ ({\\rm GeV)}$"]):
+    fig, ax = plt.subplots(1, 5, figsize = (15, 5))
+    for j, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$", "$\\theta$", "$\log{(p_{T}\ [{\\rm GeV}])}$"]):
         if j == 3:
-            continue
-            #width = 20 # GeV
-            #nbins = int(round(max(true_E.flatten().numpy()) - min(true_E.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            #h, bins1, _ = ax[j].hist(true_E.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
-            #ax[j].hist(reco_E.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
-            #ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
-            #ax[j].set_yscale("log")
+            width = 0.25 # GeV
+            nbins = int(round(max(true_theta.flatten().numpy()) - min(true_theta.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            h, bins1, _ = ax[j].hist(true_theta.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            ax[j].hist(reco_theta.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f}')
+            ax[j].set_yscale("log")
+        elif j == 4:
+            width = 0.25 # GeV
+            nbins = int(round(max(true_logpt.flatten().numpy()) - min(true_logpt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            h, bins1, _ = ax[j].hist(true_logpt.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            nbins = int(round(max(reco_logpt.flatten().numpy()) - min(reco_logpt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            ax[j].hist(reco_logpt.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f}')
+            ax[j].set_yscale("log")
         else:
             width = 20 if j == 0 else 0.25
-            nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) /  width) + 1 # have 20 GeV bins in each histo
             h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            nbins = int(round(max(reco_val[:, j, :].flatten().numpy()) - min(reco_val[:, j, :].flatten().numpy())) /  width) + 1 if max(reco_val[:, j, :].flatten().numpy()) < 1e4 else 8192
             ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
 
             ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV') if j == 0 else ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f}')
@@ -462,12 +474,11 @@ def plot_PtEtaPhiE(true_val, reco_val, offset, epoch, sample, network_name):
         ax[j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
         ax[j].minorticks_on()
         ax[j].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
-
         ax[j].set_xlabel(f'{feature}')
-        
+
     ax[0].set_yscale('log')
     ax[0].legend(loc = "best")
-    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
+    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
     path = f"plots/VAE/residualsPtEtaPhi_notfms/{sample}/"
     mkpath(path)
