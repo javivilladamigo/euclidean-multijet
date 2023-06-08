@@ -89,13 +89,13 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
-testing = False
+testing = True
 if testing:
     num_epochs = 20
     plot_every = 1
 else:
     num_epochs = 500
-    plot_every = 20
+    plot_every = 50
 lr_init  = 0.001
 lr_scale = 0.5
 bs_scale = 2
@@ -153,6 +153,8 @@ class Loader_Result:
         self.theta_ = torch.zeros(self.n, 1, 4)
         self.logpt_ = torch.zeros(self.n, 1, 4)
         self.rec_logpt_ = torch.zeros(self.n, 1, 4)
+        self.wloss_distribution = torch.zeros(self.n, 3, 4)
+        self.loss_weights = torch.zeros(self.n, 3, 4)
         self.decoding_loss = torch.zeros(self.n, 3, 4)  # [batch_size, nb_of_features, effective_nb_of_jets]
                                                         # nb_of_features is the number of features reconstructed (i.e. how many features from [pt, eta, phi, mass])
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
@@ -211,12 +213,14 @@ class Loader_Result:
         l1_loss = torch.abs(rec_logpt - logpt) # element-wise squared loss
 
         #dPt = med_mask * med_loss + tail_mask * tail_loss + (1 - mask_glob) * l1_loss  # apply mask to combine the losses
-        logpt_weights = ((logpt - logpt.mean(dim=0)) / logpt.std(dim=0))**2 - logpt.min(dim=0).values
-        dPt = (rec_logpt - logpt) * (logpt_weights + 0.9)
+        logpt_weights = 4*((logpt - logpt.median(dim=0).values) / logpt.std(dim=0))**2 - logpt.min(dim=0).values
+        #gaussian_midDistr_weights = (((logpt - 0.5*(logpt.max(dim=0).values +logpt.min(dim=0).values)) / logpt.std(dim=0))**2).max(dim=0).values     -     ((logpt - 0.5*(logpt.max(dim=0).values +logpt.min(dim=0).values)) / logpt.std(dim=0))**2
+        gaussian_midDistr_weights = (((logpt - 5) / 2)**2).max(dim=0).values     -     (((logpt - 5)) / 2)**2
+        dPt = (rec_logpt - logpt) * (logpt_weights)
 
 
         # (th)eta
-        eta_weights = ((j[:,1:2,:] - j[:,1:2,:].mean(dim=0)) / j[:,1:2,:].std(dim=0))**2
+        eta_weights = 2*((j[:,1:2,:] - j[:,1:2,:].mean(dim=0)) / j[:,1:2,:].std(dim=0))**2
         dEta = (rec_j[:,1:2,:] - j[:,1:2,:]) * (eta_weights+1)
         theta = 2 * torch.atan(torch.exp(-j[:,1:2,:]))
         theta_mean = theta.mean(dim=0)
@@ -243,11 +247,13 @@ class Loader_Result:
         dPhi = rec_j[:,2:3,:] - j[:,2:3,:]
 
         loss_batch = torch.cat((torch.abs(dPt), torch.abs(dTheta),  torch.abs(dPhi)), dim = 1)
-        return loss_batch, rec_theta, theta
+
+        loss_weights = torch.cat((logpt_weights, eta_weights), dim = 1)
+        return loss_batch, rec_theta, theta, loss_weights
 
     def infer_batch_VAE(self, j, rec_j, z, mu, std, lweight, rweight): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
-        loss_batch, rec_theta, theta = self.loss_fn(j, rec_j)
+        loss_batch, rec_theta, theta, loss_weights = self.loss_fn(j, rec_j)
 
         assert loss_batch.shape[1:] == self.decoding_loss.shape[1:], "decoding_loss and loss_batch shapes mismatch"
         self.decoding_loss[self.n_done : self.n_done + n_batch] = loss_batch
@@ -255,6 +261,8 @@ class Loader_Result:
         self.theta_[self.n_done : self.n_done + n_batch] = theta
         self.logpt_[self.n_done : self.n_done + n_batch] = torch.log(j[:,0:1,:])
         self.rec_logpt_[self.n_done : self.n_done + n_batch] = torch.log(rec_j[:,0:1,:])
+        if self.train:
+            self.loss_weights[self.n_done : self.n_done + n_batch, 0:2] = loss_weights[:,0:2]
         self.n_done += n_batch
     
     def infer_done_VAE(self):
@@ -262,11 +270,12 @@ class Loader_Result:
         self.loss = (self.w * self.decoding_loss.permute(1,2,0)).permute(2,0,1).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
         self.history['loss'].append(copy(self.loss))
         train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
+        self.wloss_distribution = (self.w * self.decoding_loss.permute(1,2,0)).permute(2,0,1) if self.train else None
         self.n_done = 0
 
     def train_batch_VAE(self, j, rec_j, z, mu, std, lweight, rweight, w): # expecting same sized j and rec_j
 
-        loss_batch, _, _ = self.loss_fn(j, rec_j)
+        loss_batch, _, _, _ = self.loss_fn(j, rec_j)
 
         loss_batch = (w * loss_batch.permute(1,2,0)).permute(2,0,1).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
         loss_batch.backward()
@@ -423,6 +432,10 @@ class Model_VAE:
             #print(total_rec_m2j_[0])
             plots.plot_training_residuals_VAE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
             plots.plot_PtEtaPhiE(total_j_[:,0:3,:], total_rec_j_[:,0:3,:], self.valid_result.theta_, self.valid_result.rec_theta_, self.valid_result.logpt_, self.valid_result.rec_logpt_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_loss_distr(total_j_[:,0:3,:], self.train_result.wloss_distribution, self.train_result.loss_weights,offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            
+            if self.train_result.train:
+                self.train_result.loss_weights *= 0 # not sure if it is necessary but
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones or self.epoch in gb_milestones): # and self.network.n_ghost_batches:
             if self.epoch in gb_milestones and self.network.n_ghost_batches:
@@ -464,12 +477,13 @@ class Model_VAE:
             else:
                 val_loss_increase_counter += 1
             
-            if val_loss_increase_counter == 20 or val_loss_increase_counter == 40 or val_loss_increase_counter == 60 or val_loss_increase_counter == 80:
+            if val_loss_increase_counter == 20:
+                val_loss_increase_counter = 0
                 print(f'Val loss has not decreased in 20 epoch. Decay learning rate: {self.lr_current} -> {self.lr_current*lr_scale}')
                 self.lr_current *= lr_scale
                 self.lr_change.append(self.epoch)
-            if val_loss_increase_counter == 100: #or min_val_loss < 1.:
-                break
+            #if val_loss_increase_counter == 100: #or min_val_loss < 1.:
+                #break
 
         tb.flush()
         tb.close()

@@ -444,13 +444,13 @@ def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, offse
     reco_logpt = rec_logpt.detach()
 
     
-    fig, ax = plt.subplots(1, 5, figsize = (15, 5))
+    fig, ax = plt.subplots(1, 7, figsize = (15, 5))
     for j, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$", "$\\theta$", "$\log{(p_{T}\ [{\\rm GeV}])}$"]):
         if j == 3:
             width = 0.25 # GeV
             nbins = int(round(max(true_theta.flatten().numpy()) - min(true_theta.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
             h, bins1, _ = ax[j].hist(true_theta.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
-            ax[j].hist(reco_theta.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+            ax[j].hist(reco_theta.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
             ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f}')
             ax[j].set_yscale("log")
         elif j == 4:
@@ -458,7 +458,7 @@ def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, offse
             nbins = int(round(max(true_logpt.flatten().numpy()) - min(true_logpt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
             h, bins1, _ = ax[j].hist(true_logpt.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
             nbins = int(round(max(reco_logpt.flatten().numpy()) - min(reco_logpt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            ax[j].hist(reco_logpt.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+            ax[j].hist(reco_logpt.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
             ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f}')
             ax[j].set_yscale("log")
         else:
@@ -466,7 +466,7 @@ def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, offse
             nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) /  width) + 1 # have 20 GeV bins in each histo
             h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
             nbins = int(round(max(reco_val[:, j, :].flatten().numpy()) - min(reco_val[:, j, :].flatten().numpy())) /  width) + 1 if max(reco_val[:, j, :].flatten().numpy()) < 1e4 else 8192
-            ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+            ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
 
             ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV') if j == 0 else ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f}')
             
@@ -486,8 +486,68 @@ def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, offse
     print(f'PtEtaPhi saved to {path}')
     plt.close()
 
+def plot_loss_distr(j, loss_distr, loss_weights, offset, epoch, sample, network_name):
+    import matplotlib
+    #matplotlib.use('qtagg')
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    #from fast_histogram import histogram2d
+
+    loss_weights = loss_weights.detach()
+    loss_distr = loss_distr.detach()
+    true_j = j.detach()
 
 
+
+    #cmap = cm.get_cmap("bwr")
+    cmap = cm.get_cmap("viridis")
+    #cc.cm["CET_L17"].copy()
+    
+    fig, ax = plt.subplots(2, 3, figsize = (15, 5))
+    cbar_ax = fig.add_axes([0.96, 0.1, 0.01, 0.8])
+    vmax_mob = 0
+
+    for j, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$"]):
+
+
+        '''
+        Implementation of fast histogram is weird: histogram2d produces a 2d plot that makes NO sense in the confrontation of y vs x (the correlation is lost somehow)
+        bounds = [(true_val[:, i, :].min(), true_val[:, i, :].max()), (reco_val[:, i, :].min(), reco_val[:, i, :].max())]
+        h = histogram2d(true_val[:, i, :], reco_val[:, i, :], range=bounds, bins=100) # get the histogram of the i-th feature for all the events and all the jets
+        im = ax[i].imshow(h.T, cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = h.max()), extent= [*bounds[0], *bounds[1]], aspect = 'auto')
+        '''
+
+        h2d, xbins, ybins, im = ax[0, j].hist2d(true_j[:, j, :].flatten().numpy(), loss_distr[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+        
+        if j == 0 or j == 1:
+            h2d, xbins, ybins, im = ax[1, j].hist2d(true_j[:, j, :].flatten().numpy(), loss_weights[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+
+        for i in range(2):
+            ax[i, j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
+            ax[i, j].minorticks_on()
+            ax[i, j].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
+            ax[i, j].set_xlabel(f'True {feature}')
+            
+        ax[0, j].set_ylabel(f'Loss for {feature}')
+        ax[1, j].set_ylabel(f'$\omega_L$ for {feature}')
+
+        #ax[i].plot(xbins, xbins, lw = 2., c = 'grey', ls = '-.')
+        ax[i, j].axhline(y = 0, lw = 2., c = 'grey', ls = '-.')
+        
+        if h2d.max() > vmax_mob:
+            im_vmax = im
+            vmax_mob = h2d.max()
+        
+        j+=1
+
+    fig.colorbar(im_vmax, cax=cbar_ax)
+    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
+    fig.suptitle(f'Epoch {epoch}')
+    path = f"plots/VAE/residualsPtEtaPhi_notfms/{sample}/"
+    mkpath(path)
+    fig.savefig(f'{path}{sample}_lossdistr_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
+    print(f'Loss distribution saved to {path}')
+    plt.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
