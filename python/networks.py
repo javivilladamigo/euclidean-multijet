@@ -177,7 +177,6 @@ def PxPyPzE(v): # need this to be able to add four-vectors
 
     return torch.cat( (Px,Py,Pz,E), 1 )
 
-
 def PtEtaPhiM(v):
     px = v[:,0:1]
     py = v[:,1:2]
@@ -193,7 +192,6 @@ def PtEtaPhiM(v):
 
     return torch.cat( (Pt, Eta, Phi, M) , 1 ) 
     
-
 def addFourVectors(v1, v2, v1PxPyPzE=None, v2PxPyPzE=None): # output added four-vectors
     #vX[batch index, (pt,eta,phi,m), object index]
 
@@ -227,8 +225,11 @@ def setLeadingPhiTo0(batched_v) -> torch.Tensor: # expects [batch, feature, jet 
     return batched_v
 
 def setSubleadingPhiPositive(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
-    batched_v[:,2,1:4][batched_v[:,2,1]<0] += torch.pi # starting from phi2, add pi to j2, j3, j4 if phi1 < 0
+    batched_v[:,2,1:4][batched_v[:,2,1]<0] += torch.pi # starting from phi2, add pi to j2, j3, j4 if phi2 < 0
     batched_v[:,2,:][batched_v[:,2,:]>torch.pi] -= 2*torch.pi # retransform the phi that are > pi
+
+    #phiSign = 1-2*(batched_v[:,2,1:2]<0).float() # -1 if phi2 is negative, +1 if phi2 is zero or positive
+    #batched_v[:,2,1:4] = phiSign * batched_v[:,2,1:4]
     return batched_v
 
 #
@@ -273,7 +274,7 @@ class Input_Embed(nn.Module):
         j = j.clone()# prevent overwritting data from dataloader when doing operations directly from RAM rather than copying to VRAM
         j = j.view(-1,4,4)
 
-        d, dPxPyPzE = addFourVectors(j[:,:,(0,2,0,1,0,1)], 
+        d, dPxPyPzE = addFourVectors(j[:,:,(0,2,0,1,0,1)], # 6 pixels
                                      j[:,:,(1,3,2,3,3,2)])
 
         q, qPxPyPzE = addFourVectors(d[:,:,(0,2,4)],
@@ -433,13 +434,13 @@ class Encoder(nn.Module):
 
 
 class Basic_CNN_AE(nn.Module):
-    def __init__(self, dimension, out_features = 12, device = 'cpu', construct_rel_features = False):
+    def __init__(self, dimension, out_features = 12, device = 'cpu'):
         super(Basic_CNN_AE, self).__init__()
         self.device = device
         self.d = dimension
         self.out_features = out_features
-        self.n_ghost_batches = 0#16
-        self.construct_rel_features = construct_rel_features
+        self.n_ghost_batches = 64
+
 
 
         self.name = f'Basic_CNN_AE_{self.d}'
@@ -454,48 +455,67 @@ class Basic_CNN_AE(nn.Module):
         
         self.decode_q               = nn.ConvTranspose1d(self.d, self.d, 3)
         self.dijets_from_quadjets   = nn.ConvTranspose1d(self.d, self.d, 2, stride = 2)
-        self.decode_d               = nn.ConvTranspose1d(self.d, self.d, 6)
+        #self.decode_d               = nn.ConvTranspose1d(self.d, self.d, 6)
         self.jets_from_dijets       = nn.ConvTranspose1d(self.d, self.d, 2, stride = 2)
-        self.decode_j               = nn.ConvTranspose1d(self.d, self.d, 12)
-        self.select_dec             = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+        #self.decode_j               = nn.ConvTranspose1d(self.d, self.d, 12)
+        self.select_dec             = Ghost_Batch_Norm(self.d * 4, features_out=1, conv=True, bias=False, device = self.device)
 
-        self.decode_Pt              = nn.Sequential(
+        self.decode_j = Ghost_Batch_Norm(self.d, features_out=4, conv = True, device = self.device)
+
+        '''
+        self.decode_Px              = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
-            nn.BatchNorm1d(20),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
             nn.PReLU(),
             nn.Dropout(p=0.2),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.Sigmoid()
         )
-        self.decode_Eta              = nn.Sequential(
+        self.decode_Py             = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
-            nn.BatchNorm1d(20),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
             nn.PReLU(),
             nn.Dropout(p=0.2),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.Tanh()
         )
-        self.decode_Phi              = nn.Sequential(
+        '''
+        self.decode_PxPy            = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
-            nn.BatchNorm1d(20),
+            nn.Linear(in_features = 21, out_features = 60, device = self.device),
             nn.PReLU(),
-            nn.Dropout(p=0.2),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+            nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 60, out_features = 70, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 70, out_features = 80, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.PReLU(),
+            #nn.Linear(in_features = 80, out_features = 85, device = self.device),
+            #nn.PReLU(),
+            nn.Linear(in_features = 60, out_features = 8, device = self.device),
+
+
         )
 
+
+        self.decode_Pz             = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+        )
         self.decode_E               = nn.Sequential(
             nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 20, device = self.device),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
             #nn.Dropout(p = 0.2),
-            nn.BatchNorm1d(20),
+            nn.BatchNorm1d(100),
             nn.PReLU(),
             nn.Dropout(p=0.2),
-            nn.Linear(in_features = 20, out_features = 4, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (4, 1))
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
         )
 
 
@@ -518,16 +538,19 @@ class Basic_CNN_AE(nn.Module):
 
     
     def forward(self, j):
-        # j.shape = [batch_size, 4, 4]
+              # j.shape = [batch_size, 4, 4]
         #j[torch.all(j[:, 0]>40, axis = 1)] # pt > 30 GeV
         j_rot = j.clone()
 
         # make leading jet eta positive direction so detector absolute eta info is removed
         # set phi = 0 for the leading jet and rotate the event accordingly
         # set phi1 > 0 by flipping wrt the xz plane
-        # j_rot = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rot)))
+
+        # maybe rotate the jets at the end, or take it out. Also it could be possible to rotate jets at the end to match the initial jets
+        j_rot = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rot)))
         
 
+        # remove and return from Input_Embed
         d_rot, dPxPyPzE_rot = addFourVectors(   j_rot[:,:,(0,2,0,1,0,1)], 
                                                         j_rot[:,:,(1,3,2,3,3,2)])
         q_rot, qPxPyPzE_rot = addFourVectors(   d_rot[:,:,(0,2,4)],
@@ -538,56 +561,85 @@ class Basic_CNN_AE(nn.Module):
         m4j = q_rot[:, 3:4, 0]
 
         # convert to PxPyPzE and compute means and variances
-        j_sc = j_rot.clone()
-        batch_mean = j_rot.mean(dim = (0, 2))
-        batch_std = j_rot.std(dim = (0, 2))
+        jPxPyPzE = PxPyPzE(j_rot)
+        jPxPyPzE_sc = jPxPyPzE.clone()
+        batch_mean = jPxPyPzE.mean(dim = (0, 2))
+        batch_std = jPxPyPzE.std(dim = (0, 2))
         
 
-        '''
-        # j_rot.shape = [batch_size, 4, 4]
-        j, d, q = self.input_embed(j_rot)                                                   # j.shape = [batch_size, 8, 12]
-                                                                                                # d.shape = [batch_size, 8, 6]
-                                                                                                # q.shape = [batch_size, 8, 3]
+                                                                                                # j_rot.shape = [batch_size, 4, 4]
+        j, d, q = self.input_embed(j_rot)                                                       # j.shape = [batch_size, 8, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2
+                                                                                                # d.shape = [batch_size, 8, 6]  -> 6 = 01 23 02 13 03 12
+                                                                                                # q.shape = [batch_size, 8, 3]  -> 3 = 0123 0213 0312; 3 pixels each with 8 features
         d = d + NonLU(self.jets_to_dijets(j))                                                   # d.shape = [batch_size, 8, 6]
         q = q + NonLU(self.dijets_to_quadjets(d))                                               # q.shape = [batch_size, 8, 3]
         #compute a score for each event quadjet
-        q_logits = self.select_q(q)                                                             # q_logits.shape = [batch_size, 1, 3]
+        q_logits = self.select_q(q)                                                             # q_logits.shape = [batch_size, 1, 3] -> 3 = 0123 0213 0312
         #convert the score to a 'probability' with softmax. This way the classifier is learning which pairing is most relevant to the classification task at hand.
         q_score = F.softmax(q_logits, dim=-1)                                                   # q_score.shape = [batch_size, 1, 3]
         q_logits = q_logits.view(-1, 3)
         #add together the quadjets with their corresponding probability weight
-        e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1]
-        #print(e[0])
-        '''
+        e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1] (8x3 · 3x1 = 8x1)
 
-        e = self.encode(j_rot[:,0:3,:]) # Energy (=mass) is not used as input
+
+
         #print(e.shape)
 
-        dec_q = self.decode_q(e)                                                                # dec_q.shape = [batch_size, 8, 3]
-        dec_d =  self.decode_d(e) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
-        dec_j = self.decode_j(e) + NonLU(self.jets_from_dijets(dec_d))                          # dec_j.shape = [batch_size, 8, 12]
-        full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
-        selected_dec = self.select_dec(full_dec)
-        rec_Pt = self.decode_Pt(selected_dec)
-        rec_Eta = self.decode_Eta(selected_dec)
-        rec_Phi = self.decode_Phi(selected_dec)
-        rec_E = self.decode_E(selected_dec)
+        dec_q = NonLU(self.decode_q(e))                                                                # dec_q.shape = [batch_size, 8, 3] 0123 0213 0312
+        dec_d =  NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6] 01 23 02 13 03 12
+        dec_j = NonLU(self.jets_from_dijets(dec_d))                          # dec_j.shape = [batch_size, 8, 12]; dec_j is interpreted as jets 0 1 2 3 0 2 1 3 0 3 1 2
+        dec_j = dec_j.view(-1, self.d, 3, 4)                                      # last index is jet 
+
+        dec_j = dec_j.transpose(-1, -2) # last index is pairing history now 
+        dec_j = dec_j.view(-1, self.d * 4, 3) # 32 numbers corresponding to each pairing
+        dec_j_logits = self.select_dec(dec_j)
         
+        dec_j_score = F.softmax(dec_j_logits, dim = -1)
+
+        dec_j = torch.matmul(dec_j, dec_j_score.transpose(1, 2))
         
-        rec_j = torch.cat((rec_Pt, rec_Eta, rec_Phi, rec_E), dim = 2).permute(0,2,1)
-        rec_j_sc = rec_j.clone()
-        for i in range(len(j_rot[0, :, 0])):
+        dec_j = dec_j.view(-1, 8, 4)
+        # conv kernel 1
+        dec_j = self.decode_j(dec_j) # NonLU ?
+        sign_p = torch.cat((dec_j[:, 0:3, :].sign(), torch.ones(j.shape[0], 1, 4)), dim = 1)
+        sign_p[sign_p == 0] += 1
+
+
+        dec_j = sign_p * torch.exp(torch.abs(dec_j)) - 1
+        
+        # loss 
+        
+
+
+
+        
+     
+     
+
+
+
+
+
+        # either do nothing or compute the 16 losses
+
+
+        sorted_indices = PtEtaPhiM(rec_jPxPyPzE)[:,0,:].sort(descending = True, dim = 1)[1]
+        for b in range(j.shape[0]):
+            rec_jPxPyPzE[b, :, sorted_indices[b]]
+        rec_jPxPyPzE[:, 1, 0] = 0 # leading Py = 0
+
+
+        rec_jPxPyPzE_sc = rec_jPxPyPzE.clone()
+        for i in range(len(jPxPyPzE[0, :, 0])):
             # obtained a normalized j for the computation of the loss
-            j_sc[:, i, :]   =     (j_rot[:, i, :] - batch_mean[i]) / batch_std[i]
-            rec_j_sc[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
+            jPxPyPzE_sc[:, i, :] = (jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
+            rec_jPxPyPzE_sc[:, i, :] = (rec_jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
         
         
-        rec_d, rec_dPxPyPzE = addFourVectors(   rec_j[:,:,(0,2,0,1,0,1)], 
-                                                rec_j[:,:,(1,3,2,3,3,2)])
+        rec_d, rec_dPxPyPzE = addFourVectors(   PtEtaPhiM(rec_jPxPyPzE)[:,:,(0,2,0,1,0,1)], 
+                                                PtEtaPhiM(rec_jPxPyPzE)[:,:,(1,3,2,3,3,2)])
         rec_q, rec_qPxPyPzE = addFourVectors(   rec_d[:,:,(0,2,4)],
-                                                rec_d[:,:,(1,3,5)],
-                                                v1PxPyPzE = rec_dPxPyPzE[:,:,(0,2,4)],
-                                                v2PxPyPzE = rec_dPxPyPzE[:,:,(1,3,5)])
+                                                rec_d[:,:,(1,3,5)])
         rec_m2j = rec_d[:, 3:4, :]
         rec_m4j = rec_q[:, 3:4, 0]
 
@@ -612,7 +664,7 @@ class Basic_CNN_AE(nn.Module):
 
             
         
-        return rec_j, rec_j_sc, j_rot, j_sc, rec_m2j, m2j, rec_m4j, m4j
+        return rec_jPxPyPzE, rec_jPxPyPzE_sc, jPxPyPzE, jPxPyPzE_sc, rec_m2j, m2j, rec_m4j, m4j
 
 class VAE(nn.Module):
     def __init__(self, latent_dim, device = 'cpu'):
@@ -642,7 +694,7 @@ class VAE(nn.Module):
 
 
 
-        self.decode_Pt              = nn.Sequential(
+        self.decode_Px              = nn.Sequential(
             nn.Flatten(start_dim = 1),
             nn.Linear(in_features = 21, out_features = 100, device = self.device),
             nn.BatchNorm1d(100),
@@ -651,7 +703,7 @@ class VAE(nn.Module):
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
             nn.Sigmoid()
         )
-        self.decode_Eta             = nn.Sequential(
+        self.decode_Py             = nn.Sequential(
             nn.Flatten(start_dim = 1),
             nn.Linear(in_features = 21, out_features = 100, device = self.device),
             nn.BatchNorm1d(100),
@@ -661,7 +713,7 @@ class VAE(nn.Module):
             nn.Tanh()
 
         )
-        self.decode_Phi             = nn.Sequential(
+        self.decode_Pz             = nn.Sequential(
             nn.Flatten(start_dim = 1),
             nn.Linear(in_features = 21, out_features = 100, device = self.device),
             nn.BatchNorm1d(100),
@@ -670,7 +722,7 @@ class VAE(nn.Module):
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
             nn.Hardtanh(min_val=-torch.pi, max_val=torch.pi)
         )
-        self.decode_M               = nn.Sequential(
+        self.decode_E               = nn.Sequential(
             nn.Flatten(start_dim = 1),
             nn.Linear(in_features = 21, out_features = 100, device = self.device),
             #nn.Dropout(p = 0.2),
@@ -680,12 +732,7 @@ class VAE(nn.Module):
             nn.Linear(in_features = 100, out_features = 4, device = self.device),
         )
 
-        self.w_l = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(self.d, 2)
-        )
-        self.lweight = 0
-        self.rweight = 0
+
 
 
 
@@ -729,8 +776,7 @@ class VAE(nn.Module):
         mu, std = mu.view(-1, self.d, 1), std.view(-1, self.d, 1)
         z = mu + std
         #z = z.view(-1, self.d, 1)                                                          # recover [batch_dim, 8, 1] for decoding
-        self.lweight = torch.sigmoid(self.w_l(z)[:,0])
-        self.rweight = 1-self.lweight
+
 
         dec_q = self.decode_q(z)                                                                # dec_q.shape = [batch_size, 8, 3]
         dec_d =  self.decode_d(z) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
@@ -738,12 +784,12 @@ class VAE(nn.Module):
         full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
         selected_dec = self.select_dec(full_dec)
         
-        rec_Pt = torch.exp(2.5+ 5*self.decode_Pt(selected_dec).view(-1, 1, 4))
-        rec_Eta = 4 * self.decode_Eta(selected_dec).view(-1, 1, 4)
-        #rec_M = self.decode_M(selected_dec).view(-1, 1, 4)
+        rec_Pt = torch.exp(2.5+ 5*self.decode_Px(selected_dec).view(-1, 1, 4))
+        rec_Eta = 4 * self.decode_Py(selected_dec).view(-1, 1, 4)
+        #rec_M = self.decode_E(selected_dec).view(-1, 1, 4)
         
 
-        rec_Phi = self.decode_Phi(selected_dec).view(-1, 1, 4)
+        rec_Phi = self.decode_Pz(selected_dec).view(-1, 1, 4)
 
 
 
@@ -772,9 +818,9 @@ class VAE(nn.Module):
         dec_j = self.decode_j(e) + NonLU(self.jets_from_dijets(dec_d))                          # dec_j.shape = [batch_size, 8, 12]
         full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
         selected_dec = self.select_dec(full_dec)
-        rec_Pt = self.decode_Pt(selected_dec)
-        rec_Eta = self.decode_Eta(selected_dec)
-        rec_Phi = self.decode_Phi(selected_dec)
+        rec_Pt = self.decode_Px(selected_dec)
+        rec_Eta = self.decode_Py(selected_dec)
+        rec_Phi = self.decode_Pz(selected_dec)
         rec_E = self.decode_E(selected_dec)
         
         
@@ -815,8 +861,8 @@ class VAE(nn.Module):
         '''
             
         
-        return rec_j, z, mu, std, self.lweight, self.rweight
-
+        return rec_j, z, mu, std
+    
 class K_Fold(nn.Module):
     def __init__(self, models, task = 'FvT'):
         super(K_Fold, self).__init__()
@@ -847,10 +893,7 @@ class K_Fold(nn.Module):
 
             for offset, model in enumerate(self.models):
                 #mask = (e==offset)
-                if self.models[0].construct_rel_features: # check if the models were constructed with relative features
-                    rec_j, rec_j_sc, j_sc, rel_rec_j, rel_rec_j_sc, rel_j_sc = model(j)
-                else:
-                    rec_j, rec_j_sc, j_rot, j_sc, rec_m2j, m2j, rec_m4j, m4j = model(j)
+                rec_j, rec_j_sc, j_rot, j_sc, rec_m2j, m2j, rec_m4j, m4j = model(j)
 
             return rec_j
 

@@ -150,8 +150,11 @@ def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, m2j, rec_m2j, m4
         im = ax[i].imshow(h.T, cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = h.max()), extent= [*bounds[0], *bounds[1]], aspect = 'auto')
         '''
         
-        if i ==0:
-            h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+        if i == 0:
+            if j == 1:
+                h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, 1:4].flatten().numpy(), res[:, j, 1:4].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+            else:
+                h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
         elif i == 1:
             h2d, xbins, ybins, im = ax[1, 0].hist2d(true_m2j[:, :, :].flatten().numpy(), res_m2j[:, :, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
             h2d, xbins, ybins, im = ax[1, 1].hist2d(true_m4j[:, :].flatten().numpy(), res_m4j[:, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50)) 
@@ -178,7 +181,7 @@ def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, m2j, rec_m2j, m4
     fig.colorbar(im_vmax, cax=cbar_ax)
     fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
-    path = f"plots/VAE/residualsPxPyPz_notfms/{sample}/"
+    path = f"plots/redec/{sample}/"
     mkpath(path)
     fig.savefig(f'{path}{sample}_residuals_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
     print(f'Residuals saved to {path}')
@@ -366,13 +369,13 @@ def plot_loss(loss, offset, epoch, sample, network_name):
     ax.set_ylabel('Loss')
     ax.set_xticks(np.arange(0, len(loss["train"]) + 1, len(loss["train"]) // 20)) if len(loss["train"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]) + 1, 2))
     fig.tight_layout()
-    path = f"plots/VAE/residualsPtEtaPhi_notfms/{sample}/"
+    path = f"plots/redec/{sample}/"
     mkpath(path)
     fig.savefig(f'{path}{sample}_loss_{network_name}_offset_{offset}_{epoch:03d}epochs.pdf')
     print(f'Losses saved to {path}')
     plt.close()
 
-def plot_PxPyPzPt(true_val, reco_val, offset, epoch, sample, network_name):
+def plot_PxPyPzE(true_val, reco_val, offset, epoch, sample, network_name):
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
@@ -386,19 +389,21 @@ def plot_PxPyPzPt(true_val, reco_val, offset, epoch, sample, network_name):
     true_val = true_val.detach()
     reco_val = reco_val.detach()
 
-    width = 20 # GeV
+    width = 10 # GeV
     fig, ax = plt.subplots(1, 4, figsize = (15, 5))
-    for j, feature in enumerate(["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$p_{T}\ ({\\rm GeV)}$"]):
-        if j == 3:
-            nbins = int(round(max(true_pt.flatten().numpy()) - min(true_pt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            h, bins1, _ = ax[j].hist(true_pt.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
-            ax[j].hist(reco_pt.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
-            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+    for j, feature in enumerate(["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$E\ ({\\rm GeV)}$"]):
+        if j == 1:
+            nbins = int(round(max(true_val[:, j, 1:4].flatten().numpy()) - min(true_val[:, j, 1:4].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            h, bins1, _ = ax[j].hist(true_val[:, j, 1:4].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            nbins = int(round(max(reco_val[:, j, 1:4].flatten().numpy()) - min(reco_val[:, j, 1:4].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+            ax[j].hist(reco_val[:, j, 1:4].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
         else:
             nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
             h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            nbins = int(round(max(reco_val[:, j, :].flatten().numpy()) - min(reco_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
             ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
-            ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+        
+        ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
         
         ax[j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
         ax[j].minorticks_on()
@@ -418,7 +423,7 @@ def plot_PxPyPzPt(true_val, reco_val, offset, epoch, sample, network_name):
     ax[0].legend(loc = "best")
     fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
-    path = f"plots/VAE/residualsPxPyPz_notfms/{sample}/"
+    path = f"plots/redec/{sample}/"
     mkpath(path)
     fig.savefig(f'{path}{sample}_PxPyPzPt_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
     print(f'PxPyPz saved to {path}')
