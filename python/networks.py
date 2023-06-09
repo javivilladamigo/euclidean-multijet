@@ -227,8 +227,8 @@ def setLeadingPhiTo0(batched_v) -> torch.Tensor: # expects [batch, feature, jet 
     return batched_v
 
 def setSubleadingPhiPositive(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
-    phiSign = 1-2*(batched_v[:,2,1:2]<0).float() # -1 if phi2 is negative, +1 if phi2 is zero or positive
-    batched_v[:,2,1:4] = phiSign * batched_v[:,2,1:4]
+    batched_v[:,2,1:4][batched_v[:,2,1]<0] += torch.pi # starting from phi2, add pi to j2, j3, j4 if phi1 < 0
+    batched_v[:,2,:][batched_v[:,2,:]>torch.pi] -= 2*torch.pi # retransform the phi that are > pi
     return batched_v
 
 #
@@ -444,21 +444,13 @@ class Basic_CNN_AE(nn.Module):
 
         self.name = f'Basic_CNN_AE_{self.d}'
 
-        #self.input_embed            = Input_Embed(self.d)
-        #self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
-        #self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
-        #self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+        self.input_embed            = Input_Embed(self.d)
+        self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
 
-        self.encode = Encoder(in_features=3, mult_factor=2, encoded_space_dim=self.d)
-        
-        # any kind of self.out should convert a [batch_size, 8, 1] into a [batch_size, 16, 1]
-        '''self.out_lin = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = self.d, out_features = 10, device = self.device),
-            nn.LeakyReLU(),
-            nn.Linear(in_features = 10, out_features = self.out_features, device = self.device),
-            nn.Unflatten(dim = 1, unflattened_size = (self.out_features, 1))
-        )'''
+
+
         
         self.decode_q               = nn.ConvTranspose1d(self.d, self.d, 3)
         self.dijets_from_quadjets   = nn.ConvTranspose1d(self.d, self.d, 2, stride = 2)
@@ -506,23 +498,14 @@ class Basic_CNN_AE(nn.Module):
             nn.Unflatten(dim = 1, unflattened_size = (4, 1))
         )
 
-        '''
-        self.j_rot_conv          = nn.Sequential(
-            nn.Conv1d(4, 4, 3, stride = 1),
-            nn.ReLU(),
-            nn.ConvTranspose1d(4, 4, 3, stride = 1))
-        
-        self.conv12                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1)
-        self.conv13                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1, dilation = 2)
-        self.conv14                 = nn.Conv1d(4, 4, kernel_size = 2, stride = 1, dilation = 3)
-        '''
+
 
 
 
 
 
     
-    '''def set_mean_std(self, j):
+    def set_mean_std(self, j):
         self.input_embed.set_mean_std(j)
 
     
@@ -531,7 +514,7 @@ class Basic_CNN_AE(nn.Module):
         self.jets_to_dijets.set_ghost_batches(n_ghost_batches)
         self.dijets_to_quadjets.set_ghost_batches(n_ghost_batches)
         self.select_q.set_ghost_batches(n_ghost_batches)
-        self.n_ghost_batches = n_ghost_batches'''
+        self.n_ghost_batches = n_ghost_batches
 
     
     def forward(self, j):
