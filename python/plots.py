@@ -128,7 +128,7 @@ def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, m2j, rec_m2j, m4
 
     true_pt = ((true_val[:, 0:1, :]**2 + true_val[:, 1:2, :]**2).sqrt()).detach()
     reco_pt = ((reco_val[:, 0:1, :]**2 + reco_val[:, 1:2, :]**2).sqrt()).detach()
-    res_pt = true_pt - reco_pt
+    res_pt = reco_pt - true_pt
 
     #cmap = cm.get_cmap("bwr")
     cmap = cm.get_cmap("viridis")
@@ -366,7 +366,7 @@ def plot_loss(loss, offset, epoch, sample, network_name):
 
     ax.legend(loc = "best")
     ax.set_xlabel('Epoch')
-    ax.set_ylabel('Loss')
+    ax.set_ylabel('Loss (GeV)')
     ax.set_xticks(np.arange(0, len(loss["train"]) + 1, len(loss["train"]) // 20)) if len(loss["train"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]) + 1, 2))
     fig.tight_layout()
     path = f"plots/redec/{sample}/"

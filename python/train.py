@@ -94,19 +94,19 @@ if testing:
     num_epochs = 20
     plot_every = 1
 else:
-    num_epochs = 500
-    plot_every = 50
+    num_epochs = 25
+    plot_every = 5
 
 lr_init  = 0.01
-lr_scale = 0.5
+lr_scale = 0.25
 bs_scale = 2
 
-bs_milestones =     [50, 100, 200, 275]
-lr_milestones =     [50, 100, 200, 250, 300, 400, 450]
-gb_milestones =     [5, 7, 10, 15, 20, 30, 40, 50, 100, 150, 200]
+bs_milestones =     [1, 3, 6, 10]
+lr_milestones =     [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 100, 200, 250, 300, 400, 450]
+#gb_milestones =     [5, 7, 10, 15, 20, 30, 40, 50, 100, 150, 200]
 
-train_batch_size = 2**9
-infer_batch_size = 2**13
+train_batch_size = 2**10
+infer_batch_size = 2**14
 max_train_batch_size = train_batch_size*64
 
 num_workers=8
@@ -131,7 +131,6 @@ num_workers=8
 
 train_loss_tosave = [] # vectors to store loss during training for plotting afterwards (to be implemented)
 val_loss_tosave = []
-min_val_loss = 999
 
 
 
@@ -148,7 +147,6 @@ class Loader_Result:
         self.w_sum = self.w.sum()
         self.cross_entropy = torch.zeros(self.n)
 
-
         self.decoding_loss = torch.zeros(self.n)  # [batch_size, nb_of_features, effective_nb_of_jets]
                                                         # nb_of_features is the number of features reconstructed (i.e. how many features from [pt, eta, phi, mass])
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
@@ -162,36 +160,38 @@ class Loader_Result:
     def eval(self):
         self.n_done = 0
 
-    def loss_fn(self, j, rec_j):
+    def loss_fn(self, j, rec_j, d, dec_d, q, dec_q):
 
-        mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, :], rec_j[:, 1:2, :], reduction = 'none') # don't use Py of leading jet because it is always 0 when phi_lead = 0
-        mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch_E = F.mse_loss(j[:, 3:4, :],  rec_j[:, 3:4, :],  reduction = 'none') # compute the MSE loss between reconstructed jets and input jets
-        mse_loss_batch = torch.cat([mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz, mse_loss_batch_E], dim = 1)
+        mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'mean') # compute the MSE loss between reconstructed jets and input jets
+        mse_loss_batch_Py = F.mse_loss(j[:, 1:2, 1:4], rec_j[:, 1:2, 1:4], reduction = 'mean') # don't use Py of leading jet because it is always 0 when phi_lead = 0
+        mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'mean') # compute the MSE loss between reconstructed jets and input jets
+        mse_loss_batch_E = F.mse_loss(j[:, 3:4, :],  rec_j[:, 3:4, :],  reduction = 'mean') # compute the MSE loss between reconstructed jets and input jets
+
+        mse_loss_batch_d = F.mse_loss(d, dec_d,  reduction = 'mean') 
+        mse_loss_batch_q = F.mse_loss(q, dec_q,  reduction = 'mean') 
         
-        mse_loss_batch = mse_loss_batch.sum(dim=(1,2))
+        mse_loss_batch = mse_loss_batch_Px + mse_loss_batch_Py + mse_loss_batch_Pz + mse_loss_batch_E #+ mse_loss_batch_d + mse_loss_batch_q
 
         return mse_loss_batch
 
-    def infer_batch_AE(self, j, rec_j): # expecting same sized j and rec_j
+    def infer_batch_AE(self, j, rec_j, d, dec_d, q, dec_q): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
 
-        loss_batch = self.loss_fn(j, rec_j)
+        loss_batch = self.loss_fn(j, rec_j, d, dec_d, q, dec_q)
 
         self.decoding_loss[self.n_done : self.n_done + n_batch] = loss_batch
         self.n_done += n_batch
     
     def infer_done_AE(self):
-        print("\nMean infer loss:", self.decoding_loss.mean(dim=0).data)
+        #print("\nMean infer loss:", self.decoding_loss.mean(dim=0).data)
         self.loss = (self.w * self.decoding_loss).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
         self.history['loss'].append(copy(self.loss))
-        train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
+        train_loss_tosave.append(self.loss.item() ** 0.5) if self.train else val_loss_tosave.append(self.loss.item() ** 0.5)
         self.n_done = 0
 
-    def train_batch_AE(self, j, rec_j, w): # expecting same sized j and rec_j
+    def train_batch_AE(self, j, rec_j, d, dec_d, q, dec_q, w): # expecting same sized j and rec_j
 
-        loss_batch = self.loss_fn(j, rec_j)
+        loss_batch = self.loss_fn(j, rec_j, d, dec_d, q, dec_q)
 
         loss_batch = (w * loss_batch).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
         loss_batch.backward()
@@ -207,7 +207,7 @@ class Model_AE:
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(dimension = 8, device = self.device)
+        self.network = networks.Basic_CNN_AE(dimension = 12, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -255,10 +255,10 @@ class Model_AE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            rec_jPxPyPzE, rec_jPxPyPzE_sc, jPxPyPzE, jPxPyPzE_sc, rec_m2j, m2j, rec_m4j, m4j = self.network(j)
+            rec_jPxPyPzE, jPxPyPzE, rec_m2j, m2j, rec_m4j, m4j, dec_d, d, dec_q, q = self.network(j)
 
             
-            result.infer_batch_AE(jPxPyPzE_sc[:,0:4,:], rec_jPxPyPzE_sc[:,0:4,:])
+            result.infer_batch_AE(rec_jPxPyPzE[:,0:4,:], jPxPyPzE[:,0:4,:], d, dec_d, q, dec_q)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -288,10 +288,10 @@ class Model_AE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            rec_jPxPyPzE, rec_jPxPyPzE_sc, jPxPyPzE, jPxPyPzE_sc, rec_m2j, m2j, rec_m4j, m4j = self.network(j)
+            rec_jPxPyPzE, jPxPyPzE, rec_m2j, m2j, rec_m4j, m4j, d, dec_d, q, dec_q = self.network(j)
 
             
-            result.train_batch_AE(jPxPyPzE_sc[:,0:4,:], rec_jPxPyPzE_sc[:,0:4,:], w)
+            result.train_batch_AE(rec_jPxPyPzE[:,0:4,:], jPxPyPzE[:,0:4,:], d, dec_d, q, dec_q, w)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
@@ -326,9 +326,8 @@ class Model_AE:
             total_rec_m4j_ = torch.Tensor(())
 
 
-
             for i, (j_, w_, R_, e_) in enumerate(self.train_result.infer_loader):
-                rec_jPxPyPzE_, rec_jPxPyPzE_sc_, jPxPyPzE_, jPxPyPzE_sc_, rec_m2j_, m2j_, rec_m4j_, m4j_ = self.network(j_) # forward pass
+                rec_jPxPyPzE_, jPxPyPzE_, rec_m2j_, m2j_, rec_m4j_, m4j_, dec_d_, d_, dec_q_, q_ = self.network(j_) # forward pass
 
                 total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
                 total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
@@ -347,8 +346,18 @@ class Model_AE:
             plots.plot_training_residuals_PxPyPzEm2jm4jPt(total_j_[:,0:4,:], total_rec_j_[:,0:4,:], total_m2j_, total_rec_m2j_, total_m4j_, total_rec_m4j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
             plots.plot_PxPyPzE(total_j_[:,0:4,:], total_rec_j_[:,0:4,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
 
+        if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
+            gb_decay = 4 #2 if self.epoch in bs_mile
+            print(f'set_ghost_batches({self.network.n_ghost_batches//gb_decay})')
+            self.network.set_ghost_batches(self.network.n_ghost_batches//gb_decay)
+        if self.epoch in bs_milestones:
+            self.increment_train_loader()
+        if self.epoch in lr_milestones:
+            print(f'Decay learning rate: {self.lr_current} -> {self.lr_current*lr_scale}')
+            self.lr_current *= lr_scale
+            self.lr_change.append(self.epoch)
 
-
+        '''
         if (self.epoch in bs_milestones or self.epoch in lr_milestones or self.epoch in gb_milestones) and self.network.n_ghost_batches:
             if self.epoch in gb_milestones and self.network.n_ghost_batches:
                 gb_decay = 4 # 2 if self.epoch in bs_mile
@@ -360,9 +369,10 @@ class Model_AE:
                 print(f'Decay learning rate: {self.lr_current} -> {self.lr_current*lr_scale}')
                 self.lr_current *= lr_scale
                 self.lr_change.append(self.epoch)
+        '''
 
     def run_training(self, plot_res = False):
-        min_val_loss = 999
+        min_val_loss = 1e20
         val_loss_increase_counter = 0
         #self.network.set_mean_std(self.train_result.dataset.tensors[0])
         self.train_inference()
@@ -414,7 +424,7 @@ class Model_AE:
                            'epoch': self.epoch,
                            'history': copy(self.history)}
         self.model_pkl = f'models/{self.task}_{self.network.name}_offset_{self.train_valid_offset}_epoch_{self.epoch:03d}.pkl'
-        print(f'Saved model as: {self.model_pkl} with a validation loss {val_loss_tosave[-1]:.2f}')
+        print(f'Saved model as: {self.model_pkl} with a validation loss {val_loss_tosave[-1]:.2e}')
         torch.save(self.model_dict, self.model_pkl)
     
     def del_prev_model(self):
