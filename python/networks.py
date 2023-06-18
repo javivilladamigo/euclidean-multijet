@@ -570,10 +570,12 @@ class Basic_CNN_AE(nn.Module):
 
         rec_j = sign_p * (torch.exp(torch.abs(dec_j)) - 1)
 
+        '''
         rec_jPxPyPzE = torch.zeros(*rec_j.shape, 24)
         for k, perm in enumerate(list(itertools.permutations([0,1,2,3]))):
                 rec_jPxPyPzE[:, :, :, k] = rec_j[:, :, perm] 
-
+        '''
+        rec_jPxPyPzE = rec_j
 
 
         # either do nothing or compute the 16 losses

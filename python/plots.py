@@ -563,6 +563,51 @@ def plot_loss_distr(j, loss_distr, loss_weights, offset, epoch, sample, network_
     print(f'Loss distribution saved to {path}')
     plt.close()
 
+def plot_etaPhi_plane(true_val, reco_val, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
+    import matplotlib
+    #matplotlib.use('qtagg')
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    #from fast_histogram import histogram2d
+
+    true_j = networks.PtEtaPhiM(true_val)
+    rec_j = networks.PtEtaPhiM(reco_val)
+    pos = int(round(np.random.uniform()*true_j.shape[0]))
+
+    pt_true = true_j[pos, 0, :].detach().flatten().numpy()
+    pt_rec = rec_j[pos, 0, :].detach().flatten().numpy()
+
+    eta_true = true_j[pos, 1, :].detach().flatten().numpy()
+    eta_rec = rec_j[pos, 1, :].detach().flatten().numpy()
+    phi_true = true_j[pos, 2, :].detach().flatten().numpy()
+    phi_rec = rec_j[pos, 2, :].detach().flatten().numpy()
+    
+    coords = [eta_true, phi_true, eta_rec, phi_rec]         
+    #cmap = cm.get_cmap("bwr")
+    cmap = cm.get_cmap("viridis")
+    #cc.cm["CET_L17"].copy()
+    
+    fig, ax = plt.subplots(1, figsize = (15, 5))
+    for j in range(4):
+        ax.plot((eta_true[j], eta_rec[j]), (phi_true[j], phi_rec[j]), lw = 2, ls = 'dashed', color = 'grey')
+    ax.scatter(eta_true, phi_true, s=pt_true, color = 'red', label = f'True {pos} event')
+    ax.scatter(eta_rec, phi_rec, s=pt_rec, color = 'blue', label = f'Reco {pos} event')
+    ax.tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
+    ax.minorticks_on()
+    ax.tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
+    ax.set_xlabel('$\eta$')
+    ax.set_ylabel('$\phi$')
+
+    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
+    fig.suptitle(f'Epoch {epoch}')
+    ax.legend(loc='best')
+    path = f"plots/redec/{sample}/"
+    mkpath(path)
+    fig.savefig(f'{path}{sample}_etaPhiplane_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
+    print(f'EtaPhiplane saved to {path}')
+    plt.close()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--hists', default='data/hists_normalized.pkl', help='File containing hists to be plotted')

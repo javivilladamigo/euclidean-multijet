@@ -166,51 +166,50 @@ class Loader_Result:
     def eval(self):
         self.n_done = 0
 
-    def loss_fn(self, j, rec_j, d, dec_d, q, dec_q, phi_rotations, reduction = 'mean'):
-        j = j.unsqueeze(3).repeat(1, 1, 1, 24)
+    def loss_fn(self, j, rec_j, d, dec_d, q, dec_q, phi_rotations, reduction = 'mean', ignore_perm = True):
+        #j = j.unsqueeze(3).repeat(1, 1, 1, 24)
         
 
-        if phi_rotations:
-            mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = reduction)       # compute the MSE loss between reconstructed jets and input jets
-            mse_loss_batch_Py = F.mse_loss(j[:, 1:2, 1:4], rec_j[:, 1:2, 1:4], reduction = reduction)   # don't use Py of leading jet because it is always 0 when phi_lead = 0
-            mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = reduction)
-            mse_loss_batch_E = F.mse_loss(j[:, 3:4, :],  rec_j[:, 3:4, :],  reduction = reduction)
-
-            mse_loss_batch_d = F.mse_loss(d, dec_d,  reduction = reduction) 
-            mse_loss_batch_q = F.mse_loss(q, dec_q,  reduction = reduction)
-        
+        if ignore_perm:
+            mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none')
         else:
+            if phi_rotations:
+                mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = reduction)       # compute the MSE loss between reconstructed jets and input jets
+                mse_loss_batch_Py = F.mse_loss(j[:, 1:2, 1:4], rec_j[:, 1:2, 1:4], reduction = reduction)   # don't use Py of leading jet because it is always 0 when phi_lead = 0
+                mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = reduction)
+                mse_loss_batch_E = F.mse_loss(j[:, 3:4, :],  rec_j[:, 3:4, :],  reduction = reduction)
 
-            mse_loss_batch_perms = F.mse_loss(j, rec_j, reduction = 'none').sum(dim = (1, 2)) # sum along jets and features errors
-            mse_loss_batch, perm_index = mse_loss_batch_perms.min(dim = 1) # dimension 0 is batch and dimension 1 is permutation
+                mse_loss_batch_d = F.mse_loss(d, dec_d,  reduction = reduction) 
+                mse_loss_batch_q = F.mse_loss(q, dec_q,  reduction = reduction)
+            
+            else:
+
+                mse_loss_batch_perms = F.mse_loss(j, rec_j, reduction = 'none').sum(dim = (1, 2)) # sum along jets and features errors
+                mse_loss_batch, perm_index = mse_loss_batch_perms.min(dim = 1) # dimension 0 is batch and dimension 1 is permutation
 
             #best_perm = torch.Tensor(itemgetter(*perm_index)(permutations)).to(torch.uint8)
-
+            sys.exit("Reduction mode not valid. Exiting...")
+        
         if reduction == 'mean':
             mse_loss_batch = mse_loss_batch.mean() #+ mse_loss_batch_d + mse_loss_batch_q
         elif reduction == 'sum':
             mse_loss_batch = mse_loss_batch.sum()
-        else:
-            sys.exit("Reduction mode not valid. Exiting...")
-
-        return mse_loss_batch, perm_index
+        return mse_loss_batch
 
     def infer_batch_AE(self, j, rec_j, d, dec_d, q, dec_q, phi_rotations): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
 
-        loss_batch, perm_index = self.loss_fn(j, rec_j, d, dec_d, q, dec_q, phi_rotations)
-        if self.train:
+        loss_batch = self.loss_fn(j, rec_j, d, dec_d, q, dec_q, phi_rotations = phi_rotations)
+        #loss_batch, perm_index = self.loss_fn(j, rec_j, d, dec_d, q, dec_q, phi_rotations)
+        '''if self.train:
             self.train_best_perm[self.n_done : self.n_done + n_batch] = perm_index 
         else:
-            self.val_best_perm[self.n_done : self.n_done + n_batch] = perm_index
+            self.val_best_perm[self.n_done : self.n_done + n_batch] = perm_index'''
 
         self.decoding_loss[self.n_done : self.n_done + n_batch] = loss_batch
         self.n_done += n_batch
     
     def infer_done_AE(self):
-        if not self.train:
-            print(self.val_best_perm)
-
         #print("\nMean infer loss:", self.decoding_loss.mean(dim=0).data)
         self.loss = (self.w * self.decoding_loss).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
         self.history['loss'].append(copy(self.loss))
@@ -219,7 +218,7 @@ class Loader_Result:
 
     def train_batch_AE(self, j, rec_j, d, dec_d, q, dec_q, w, phi_rotations): # expecting same sized j and rec_j
 
-        loss_batch, _ = self.loss_fn(j, rec_j, d, dec_d, q, dec_q, phi_rotations)
+        loss_batch = self.loss_fn(j, rec_j, d, dec_d, q, dec_q, phi_rotations=phi_rotations)
 
         loss_batch = (w * loss_batch).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
         loss_batch.backward()
@@ -235,7 +234,7 @@ class Model_AE:
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(dimension = 8, phi_rotations = rotate_phi, device = self.device)
+        self.network = networks.Basic_CNN_AE(dimension = 12, phi_rotations = rotate_phi, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -359,9 +358,9 @@ class Model_AE:
                 rec_jPxPyPzE_, jPxPyPzE_, rec_m2j_, m2j_, rec_m4j_, m4j_, dec_d_, d_, dec_q_, q_ = self.network(j_) # forward pass
                 n_batch = j_.shape[0]
 
-                perm_idx = itemgetter(*self.train_result.train_best_perm)(permutations)
+                #perm_idx = itemgetter(*self.train_result.train_best_perm)(permutations)
                 
-                rec_jPxPyPzE_ = rec_jPxPyPzE_[:, :, :, perm_idx[self.n_done : self.n_done + n_batch]]
+                #rec_jPxPyPzE_ = rec_jPxPyPzE_[:, :, :, perm_idx[self.n_done : self.n_done + n_batch]]
                 
                 total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
                 total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
@@ -381,6 +380,7 @@ class Model_AE:
 
             plots.plot_training_residuals_PxPyPzEm2jm4jPt(total_j_[:,0:4,:], total_rec_j_[:,0:4,:], total_m2j_, total_rec_m2j_, total_m4j_, total_rec_m4j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
             plots.plot_PxPyPzE(total_j_[:,0:4,:], total_rec_j_[:,0:4,:], phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_etaPhi_plane(total_j_[:,0:4,:], total_rec_j_[:,0:4,:], offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
             gb_decay = 4 #2 if self.epoch in bs_mile
