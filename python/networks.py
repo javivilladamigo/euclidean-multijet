@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import itertools
 
 torch.manual_seed(0)#make training results repeatable 
 
@@ -386,11 +387,12 @@ class Basic_CNN(nn.Module):
 
 
 class Basic_CNN_AE(nn.Module):
-    def __init__(self, dimension, out_features = 12, device = 'cpu'):
+    def __init__(self, dimension, phi_rotations, out_features = 12, device = 'cpu'):
         super(Basic_CNN_AE, self).__init__()
         self.device = device
         self.d = dimension
         self.out_features = out_features
+        self.phi_rotations = phi_rotations
         self.n_ghost_batches = 64
 
 
@@ -411,13 +413,15 @@ class Basic_CNN_AE(nn.Module):
         #self.decode_j               = nn.ConvTranspose1d(self.d, self.d, 12)
         self.select_dec             = Ghost_Batch_Norm(self.d * 4, features_out=1, conv=True, bias=False, device = self.device)
 
-        #self.decode_j = Ghost_Batch_Norm(self.d, features_out=4, conv = True, device = self.device)
+        self.decode_j = Ghost_Batch_Norm(self.d, features_out=4, conv = True, device = self.device)
+        '''
         self.decode_j = nn.Sequential(
             nn.Linear(self.d, out_features = 100, device = self.device),
             nn.LeakyReLU(),
             nn.Linear(100, out_features = 4, device = self.device),
             nn.Tanh()
         )
+        '''
 
 
         '''
@@ -506,7 +510,8 @@ class Basic_CNN_AE(nn.Module):
         # set phi1 > 0 by flipping wrt the xz plane
 
         # maybe rotate the jets at the end, or take it out. Also it could be possible to rotate jets at the end to match the initial jets
-        j_rot = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rot)))
+        
+        j_rot = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rot))) if self.phi_rotations else j_rot
         
         
         # remove and return from Input_Embed
@@ -545,30 +550,40 @@ class Basic_CNN_AE(nn.Module):
         dec_j = NonLU(self.jets_from_dijets(dec_d))                                             # dec_j.shape = [batch_size, 8, 12]; dec_j is interpreted as jets 0 1 2 3 0 2 1 3 0 3 1 2
         
         dec_j = dec_j.view(-1, self.d, 3, 4)                                                    # last index is jet 
-
         dec_j = dec_j.transpose(-1, -2)                                                         # last index is pairing history now 
-        dec_j = dec_j.contiguous().view(-1, self.d * 4, 3)                                      # 32 numbers corresponding to each pairing
+        dec_j = dec_j.contiguous().view(-1, self.d * 4, 3)                                      # 32 numbers corresponding to each pairing: which means that you have 8 numbers corresponding to each jet in each pairing concatenated along the same dimension
+                                                                                                # although this is not exact because now the information between jets is mixed, but thats the idea
         dec_j_logits = self.select_dec(dec_j)
         
-        dec_j_score = F.softmax(dec_j_logits, dim = -1)
+        dec_j_score = F.softmax(dec_j_logits, dim = -1)                                         # 1x3
 
-        dec_j = torch.matmul(dec_j, dec_j_score.transpose(1, 2))
+        dec_j = torch.matmul(dec_j, dec_j_score.transpose(1, 2))                                # (32x3 · 3x1 = 32x1)
         
-        dec_j = dec_j.view(-1, self.d, 4)
+        dec_j = dec_j.view(-1, self.d, 4)                                                       # 8x4
+        
         # conv kernel 1
-        dec_j = 10 * (self.decode_j(dec_j.permute(0,2,1))).permute(0,2,1) # NonLU ?
-        sign_p = torch.cat((dec_j[:, 0:3, :].sign(), torch.ones(j.shape[0], 1, 4)), dim = 1)
-        sign_p[sign_p == 0] += 1
-
-
-        rec_jPxPyPzE = sign_p * torch.exp(torch.abs(dec_j)) - 1
+        dec_j = NonLU(self.decode_j(dec_j)) # NonLU ?                                           # 4x4
         
+        sign_p = torch.cat((dec_j[:, 0:3, :].sign(), torch.ones(j.shape[0], 1, 4)), dim = 1)
+        sign_p[sign_p == 0.0] += 1.
+
+
+        rec_j = sign_p * (torch.exp(torch.abs(dec_j)) - 1)
+
+        rec_jPxPyPzE = torch.zeros(*rec_j.shape, 24)
+        for k, perm in enumerate(list(itertools.permutations([0,1,2,3]))):
+                rec_jPxPyPzE[:, :, :, k] = rec_j[:, :, perm] 
+
+
+
         # either do nothing or compute the 16 losses
+        
+        '''
         sorted_indices = PtEtaPhiM(rec_jPxPyPzE)[:,0,:].sort(descending = True, dim = 1)[1]
         for b in range(j.shape[0]):
             rec_jPxPyPzE[b, :, sorted_indices[b]]
         rec_jPxPyPzE[:, 1, 0] = 0 # leading Py = 0
-
+        '''
 
         '''print("q:", q[0].data, dec_q[0].data)
         print("d:", d[0].data, dec_d[0].data)

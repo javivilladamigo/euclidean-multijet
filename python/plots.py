@@ -106,7 +106,7 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
     plt.close()
 
 
-def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
+def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, phi_rot, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
@@ -152,7 +152,10 @@ def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, m2j, rec_m2j, m4
         
         if i == 0:
             if j == 1:
-                h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, 1:4].flatten().numpy(), res[:, j, 1:4].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+                if phi_rot:
+                    h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, 1:4].flatten().numpy(), res[:, j, 1:4].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+                else:
+                    h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
             else:
                 h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
         elif i == 1:
@@ -375,7 +378,7 @@ def plot_loss(loss, offset, epoch, sample, network_name):
     print(f'Losses saved to {path}')
     plt.close()
 
-def plot_PxPyPzE(true_val, reco_val, offset, epoch, sample, network_name):
+def plot_PxPyPzE(true_val, reco_val, phi_rot, offset, epoch, sample, network_name):
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
@@ -393,10 +396,16 @@ def plot_PxPyPzE(true_val, reco_val, offset, epoch, sample, network_name):
     fig, ax = plt.subplots(1, 4, figsize = (15, 5))
     for j, feature in enumerate(["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$E\ ({\\rm GeV)}$"]):
         if j == 1:
-            nbins = int(round(max(true_val[:, j, 1:4].flatten().numpy()) - min(true_val[:, j, 1:4].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            h, bins1, _ = ax[j].hist(true_val[:, j, 1:4].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
-            nbins = int(round(max(reco_val[:, j, 1:4].flatten().numpy()) - min(reco_val[:, j, 1:4].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            ax[j].hist(reco_val[:, j, 1:4].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+            if phi_rot:
+                nbins = int(round(max(true_val[:, j, 1:4].flatten().numpy()) - min(true_val[:, j, 1:4].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+                h, bins1, _ = ax[j].hist(true_val[:, j, 1:4].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+                nbins = int(round(max(reco_val[:, j, 1:4].flatten().numpy()) - min(reco_val[:, j, 1:4].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+                ax[j].hist(reco_val[:, j, 1:4].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+            else:
+                nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+                h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+                nbins = int(round(max(reco_val[:, j, :].flatten().numpy()) - min(reco_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+                ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
         else:
             nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
             h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
