@@ -94,7 +94,7 @@ Architecture hyperparameters
 permutations = list(itertools.permutations([0,1,2,3]))
 
 loss_pt = True # whether to add pt to the loss of PxPyPzE
-rotate_phi = False # whether to remove eta-phi invariances in the encoding
+rotate_phi = True # whether to remove eta-phi invariances in the encoding
 
 testing = True
 if testing:
@@ -384,8 +384,8 @@ class Model_AE:
         self.valid_inference()
         self.scheduler.step()
         if plot_res and self.epoch % plot_every == 0 and self.train_result.train:
-            plots.plot_training_residuals_PxPyPzEm2jm4jPt(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
-            plots.plot_PxPyPzE(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
+            plots.plot_PxPyPzEPtm2jm4j(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
             plots.plot_etaPhi_plane(self.train_result.j_, self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
         '''
         if plot_res and self.epoch % plot_every == 0:

@@ -415,13 +415,6 @@ class Basic_CNN_AE(nn.Module):
 
         self.decode_j = Ghost_Batch_Norm(self.d, features_out=4, conv = True, device = self.device)
         
-        self.decode_j2 = nn.Sequential(
-            nn.Linear(4, out_features = 100, device = self.device),
-            nn.PReLU(),
-            nn.Linear(100, out_features = 4, device = self.device),
-            nn.PReLU(),
-        )
-        
 
 
 
@@ -429,7 +422,7 @@ class Basic_CNN_AE(nn.Module):
             nn.Linear(in_features = 16, out_features = 32, device = self.device),
             nn.BatchNorm1d(32),
             nn.PReLU(),
-            nn.Dropout(p = 0.1),
+            nn.Dropout(p = 0.2),
             #nn.Linear(in_features = 60, out_features = 70, device = self.device),
             #nn.Dropout(p = 0.1),
             #nn.Linear(in_features = 70, out_features = 80, device = self.device),
@@ -443,7 +436,7 @@ class Basic_CNN_AE(nn.Module):
             nn.Linear(in_features = 16, out_features = 32, device = self.device),
             nn.BatchNorm1d(32),
             nn.PReLU(),
-            nn.Dropout(p = 0.1),
+            nn.Dropout(p = 0.2),
             #nn.Linear(in_features = 60, out_features = 70, device = self.device),
             #nn.Dropout(p = 0.1),
             #nn.Linear(in_features = 70, out_features = 80, device = self.device),
@@ -452,7 +445,6 @@ class Basic_CNN_AE(nn.Module):
             #nn.Linear(in_features = 80, out_features = 85, device = self.device),
             #nn.PReLU(),
             nn.Linear(in_features = 32, out_features = 4, device = self.device),
-            nn.PReLU(),
         )
         '''
         self.decode_PxPy            = nn.Sequential(

@@ -106,7 +106,7 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
     plt.close()
 
 
-def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, phi_rot, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
+def plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(true_val, reco_val, phi_rot, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
@@ -122,14 +122,14 @@ def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, phi_rot, offset,
                                                         v1PxPyPzE = dPxPyPzE_rot[:,:,(0,2,4)],
                                                         v2PxPyPzE = dPxPyPzE_rot[:,:,(1,3,5)])
         m2j = d_rot[:, 3:4, :]
-        m4j = q_rot[:, 3:4, 0]
+        m4j = q_rot[:, 3:4, :]
 
         rec_d, rec_dPxPyPzE = networks.addFourVectors(  networks.PtEtaPhiM(reco_val)[:,:,(0,2,0,1,0,1)], 
                                                         networks.PtEtaPhiM(reco_val)[:,:,(1,3,2,3,3,2)])
         rec_q, rec_qPxPyPzE = networks.addFourVectors(  rec_d[:,:,(0,2,4)],
                                                         rec_d[:,:,(1,3,5)])
         rec_m2j = rec_d[:, 3:4, :]
-        rec_m4j = rec_q[:, 3:4, 0]
+        rec_m4j = rec_q[:, 3:4, :]
 
         true_m2j = m2j.detach()
         reco_m2j = rec_m2j.detach()
@@ -154,55 +154,64 @@ def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, phi_rot, offset,
     cmap = cm.get_cmap("viridis")
     #cc.cm["CET_L17"].copy()
     
-    fig, ax = plt.subplots(2, 4, figsize = (15, 5))
+    fig, ax = plt.subplots(3, 3, figsize = (15, 5))
     cbar_ax = fig.add_axes([0.96, 0.1, 0.01, 0.8])
     vmax_mob = 0
-    i, j = 0, 0
-    for feature in ["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$E\ ({\\rm GeV)}$", "$m_{2j}\ ({\\rm GeV)}$", "$m_{4j}\ ({\\rm GeV)}$", "$p_{T}\ ({\\rm GeV)}$"]:
-        if j > 3:
-            i += 1
-            j -= 4
-
-        '''
-        Implementation of fast histogram is weird: histogram2d produces a 2d plot that makes NO sense in the confrontation of y vs x (the correlation is lost somehow)
-        bounds = [(true_val[:, i, :].min(), true_val[:, i, :].max()), (reco_val[:, i, :].min(), reco_val[:, i, :].max())]
-        h = histogram2d(true_val[:, i, :], reco_val[:, i, :], range=bounds, bins=100) # get the histogram of the i-th feature for all the events and all the jets
-        im = ax[i].imshow(h.T, cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = h.max()), extent= [*bounds[0], *bounds[1]], aspect = 'auto')
-        '''
+    i = 0
+    
         
-        if i == 0:
-            if j == 1:
-                if phi_rot:
-                    h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, 1:4].flatten().numpy(), res[:, j, 1:4].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
-                else:
-                    h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
-            else:
-                h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
-        elif i == 1:
-            h2d, xbins, ybins, im = ax[1, 0].hist2d(true_m2j[:, :, :].flatten().numpy(), res_m2j[:, :, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
-            h2d, xbins, ybins, im = ax[1, 1].hist2d(true_m4j[:, :].flatten().numpy(), res_m4j[:, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50)) 
-            h2d, xbins, ybins, im = ax[1, 2].hist2d(true_pt.flatten().numpy(), res_pt.flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+    '''
+    Implementation of fast histogram is weird: histogram2d produces a 2d plot that makes NO sense in the confrontation of y vs x (the correlation is lost somehow)
+    bounds = [(true_val[:, i, :].min(), true_val[:, i, :].max()), (reco_val[:, i, :].min(), reco_val[:, i, :].max())]
+    h = histogram2d(true_val[:, i, :], reco_val[:, i, :], range=bounds, bins=100) # get the histogram of the i-th feature for all the events and all the jets
+    im = ax[i].imshow(h.T, cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = h.max()), extent= [*bounds[0], *bounds[1]], aspect = 'auto')
+    '''
+    for j in range(4):
+        if j < 3:
+            h2d, xbins, ybins, im = ax[0, j].hist2d(true_val[:, j, 1:4].flatten().numpy(), res[:, j, 1:4].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50)) if phi_rot else ax[0, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+        else:
+            h2d, xbins, ybins, im = ax[1, 0].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50)) # plot energy
 
-        ax[i, j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
-        ax[i, j].minorticks_on()
-        ax[i, j].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
+    h2d, xbins, ybins, im = ax[1, 1].hist2d(true_pt.flatten().numpy(), res_pt.flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+    h2d, xbins, ybins, im = ax[1, 2].hist2d(true_m2j.flatten().numpy(), res_m2j.flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+    h2d, xbins, ybins, im = ax[2, 0].hist2d(true_m4j.flatten().numpy(), res_m4j.flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50)) 
 
-        ax[i, j].set_xlabel(f'True {feature}')
-        ax[i, j].set_ylabel(f'Reco - true {feature}')
+    h2d, xbins, ybins, im = ax[2, 1].hist2d(np.repeat(true_m4j.flatten().numpy(), 2), true_m2j.flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
+    h2d, xbins, ybins, im = ax[2, 2].hist2d(np.repeat(rec_m4j.flatten().numpy(), 2), rec_m2j.flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
 
-        #ax[i].plot(xbins, xbins, lw = 2., c = 'grey', ls = '-.')
-        ax[i, j].axhline(y = 0, lw = 2., c = 'grey', ls = '-.')
-        
-        if h2d.max() > vmax_mob:
-            im_vmax = im
-            vmax_mob = h2d.max()
-        
-        j+=1
+    for i in range(3):
+        for j in range(3):
+            if i < 2:
+                ax[i, j].axhline(y = 0, lw = 2., c = 'grey', ls = '-.')
+            ax[i, j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
+            ax[i, j].minorticks_on()
+            ax[i, j].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
+    ax[2, 0].axhline(y = 0, lw = 2., c = 'grey', ls = '-.')
+
+
+
+    ax[0, 0].set_xlabel('True $p_{x}\ ({\\rm GeV})$');    ax[0, 0].set_ylabel('Reco - true $p_{x}\ ({\\rm GeV})$')
+    ax[0, 1].set_xlabel('True $p_{y}\ ({\\rm GeV})$');    ax[0, 1].set_ylabel('Reco - true $p_{y}\ ({\\rm GeV})$')
+    ax[0, 2].set_xlabel('True $p_{z}\ ({\\rm GeV})$');    ax[0, 2].set_ylabel('Reco - true $p_{z}\ ({\\rm GeV})$')
+    ax[1, 0].set_xlabel('True $E\ ({\\rm GeV)}$');        ax[1, 0].set_ylabel('Reco - true $E\ ({\\rm GeV)}$')
+    ax[1, 1].set_xlabel('True $p_{T}\ ({\\rm GeV})$');    ax[1, 1].set_ylabel('Reco - true $p_{T}\ ({\\rm GeV})$')
+    ax[1, 2].set_xlabel('True $m_{2j}\ ({\\rm GeV})$');   ax[1, 2].set_ylabel('Reco - true $m_{2j}\ ({\\rm GeV})$')
+    ax[2, 0].set_xlabel('True $m_{4j}\ ({\\rm GeV})$');   ax[2, 0].set_ylabel('Reco - true $m_{4j}\ ({\\rm GeV})$')
+    ax[2, 1].set_xlabel('True $m_{4j}\ ({\\rm GeV})$')
+    ax[2, 1].set_ylabel('True $m_{2j}\ ({\\rm GeV})$')
+    ax[2, 2].set_xlabel('Reco $m_{4j}\ ({\\rm GeV})$')
+    ax[2, 2].set_ylabel('Reco $m_{2j}\ ({\\rm GeV})$')
+    
+
+    # fix this to actaully plot the maximum in colorbar
+    if h2d.max() > vmax_mob:
+        im_vmax = im
+        vmax_mob = h2d.max()
 
         
     
     fig.colorbar(im_vmax, cax=cbar_ax)
-    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
+    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.5)
     fig.suptitle(f'Epoch {epoch}')
     path = f"plots/redec/{sample}/"
     mkpath(path)
@@ -261,7 +270,7 @@ def plot_training_residuals_PtEtaPhiEm2jm4j(true_val, reco_val, offset, epoch, s
     cbar_ax = fig.add_axes([0.96, 0.1, 0.01, 0.8])
     vmax_mob = 0
     i, j = 0, 0
-    for feature in ["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$", "$m_{j}\ ({\\rm GeV)}$", "$m_{2j}\ ({\\rm GeV)}$", "$m_{4j}\ ({\\rm GeV)}$"]:
+    for feature in ["$p_{T}\ ({\\rm GeV})$", "$\eta$", "$\phi$", "$m_{j}\ ({\\rm GeV})$", "$m_{2j}\ ({\\rm GeV})$", "$m_{4j}\ ({\\rm GeV})$"]:
         if j > 3:
             i += 1
             j -= 4
@@ -340,7 +349,7 @@ def plot_training_residuals_VAE(true_val, reco_val, offset, epoch, sample, netwo
     cbar_ax = fig.add_axes([0.96, 0.1, 0.01, 0.8])
     vmax_mob = 0
     i, j = 0, 0
-    for feature in ["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$"]:
+    for feature in ["$p_{T}\ ({\\rm GeV})$", "$\eta$", "$\phi$"]:
         if j > 3:
             i += 1
             j -= 4
@@ -420,58 +429,113 @@ def plot_loss(loss, offset, epoch, sample, network_name):
     print(f'Losses saved to {path}')
     plt.close()
 
-def plot_PxPyPzE(true_val, reco_val, phi_rot, offset, epoch, sample, network_name):
+def plot_PxPyPzEPtm2jm4j(true_val, reco_val, phi_rot, offset, epoch, sample, network_name):
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     #from fast_histogram import histogram2d
 
-    true_pt = ((true_val[:, 0:1, :]**2 + true_val[:, 1:2, :]**2).sqrt()).detach()
-    reco_pt = ((reco_val[:, 0:1, :]**2 + reco_val[:, 1:2, :]**2).sqrt()).detach()
-    res_pt = true_pt - reco_pt
+    plot_masses = True
+    if plot_masses:
+        d_rot, dPxPyPzE_rot = networks.addFourVectors(  networks.PtEtaPhiM(true_val)[:,:,(0,2,0,1,0,1)], 
+                                                        networks.PtEtaPhiM(true_val)[:,:,(1,3,2,3,3,2)])
+        q_rot, qPxPyPzE_rot = networks.addFourVectors(  d_rot[:,:,(0,2,4)],
+                                                        d_rot[:,:,(1,3,5)], 
+                                                        v1PxPyPzE = dPxPyPzE_rot[:,:,(0,2,4)],
+                                                        v2PxPyPzE = dPxPyPzE_rot[:,:,(1,3,5)])
+        m2j = d_rot[:, 3:4, :]
+        m4j = q_rot[:, 3:4, 0]
+
+        rec_d, rec_dPxPyPzE = networks.addFourVectors(  networks.PtEtaPhiM(reco_val)[:,:,(0,2,0,1,0,1)], 
+                                                        networks.PtEtaPhiM(reco_val)[:,:,(1,3,2,3,3,2)])
+        rec_q, rec_qPxPyPzE = networks.addFourVectors(  rec_d[:,:,(0,2,4)],
+                                                        rec_d[:,:,(1,3,5)])
+        rec_m2j = rec_d[:, 3:4, :]
+        rec_m4j = rec_q[:, 3:4, 0]
+
+        true_m2j = m2j.detach()
+        reco_m2j = rec_m2j.detach()
+        res_m2j = reco_m2j - true_m2j
+
+        true_m4j = m4j.detach()
+        reco_m4j = rec_m4j.detach()
+        res_m4j = reco_m4j - true_m4j
 
     true_val = true_val.detach()
     reco_val = reco_val.detach()
+    res = reco_val - true_val
+    res_norm = res / true_val
+
+
+
+    true_pt = ((true_val[:, 0:1, :]**2 + true_val[:, 1:2, :]**2).sqrt()).detach()
+    rec_pt = ((reco_val[:, 0:1, :]**2 + reco_val[:, 1:2, :]**2).sqrt()).detach()
+
 
     width = 10 # GeV
-    fig, ax = plt.subplots(1, 4, figsize = (15, 5))
-    for j, feature in enumerate(["$p_{x}\ ({\\rm GeV)}$", "$p_{y}\ ({\\rm GeV)}$", "$p_{z}\ ({\\rm GeV)}$", "$E\ ({\\rm GeV)}$"]):
+    fig, ax = plt.subplots(2, 4, figsize = (15, 5))
+
+    for j, feature in enumerate(["$p_{x}\ ({\\rm GeV})$", "$p_{y}\ ({\\rm GeV})$", "$p_{z}\ ({\\rm GeV})$", "$E\ ({\\rm GeV)}$", ]):
+        
         if j == 1:
             if phi_rot:
                 nbins = int(round(max(true_val[:, j, 1:4].flatten().numpy()) - min(true_val[:, j, 1:4].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-                h, bins1, _ = ax[j].hist(true_val[:, j, 1:4].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+                h, bins1, _ = ax[0,j].hist(true_val[:, j, 1:4].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
                 nbins = int(round(max(reco_val[:, j, 1:4].flatten().numpy()) - min(reco_val[:, j, 1:4].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-                ax[j].hist(reco_val[:, j, 1:4].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+                ax[0, j].hist(reco_val[:, j, 1:4].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+                ax[0, j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
             else:
                 nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-                h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+                h, bins1, _ = ax[0,j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
                 nbins = int(round(max(reco_val[:, j, :].flatten().numpy()) - min(reco_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-                ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
-        else:
+                ax[0, j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+                ax[0, j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+        elif j != 1:
             nbins = int(round(max(true_val[:, j, :].flatten().numpy()) - min(true_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            h, bins1, _ = ax[j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+            h, bins1, _ = ax[0,j].hist(true_val[:, j, :].flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
             nbins = int(round(max(reco_val[:, j, :].flatten().numpy()) - min(reco_val[:, j, :].flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
-            ax[j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+            ax[0,j].hist(reco_val[:, j, :].flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+            ax[0, j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+        else:
+            continue
         
-        ax[j].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+    
         
-        ax[j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
-        ax[j].minorticks_on()
-        ax[j].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
+        
+        
+        ax[0, j].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
+        ax[0, j].minorticks_on()
+        ax[0, j].tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
 
-        ax[j].set_xlabel(f'{feature}')
-        
+        ax[0, j].set_xlabel(f'{feature}')
+
+    nbins = int(round(max(true_pt.flatten().numpy()) - min(true_pt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+    h, bins1, _ = ax[1,0].hist(true_pt.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+    nbins = int(round(max(rec_pt.flatten().numpy()) - min(rec_pt.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+    ax[1,0].hist(rec_pt.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+    ax[1, 0].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+
+    nbins = int(round(max(true_m2j.flatten().numpy()) - min(true_m2j.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+    h, bins1, _ = ax[1,1].hist(true_m2j.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+    nbins = int(round(max(rec_m2j.flatten().numpy()) - min(rec_m2j.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+    ax[1,1].hist(rec_m2j.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+    ax[1, 1].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+
+    nbins = int(round(max(true_m4j.flatten().numpy()) - min(true_m4j.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+    h, bins1, _ = ax[1,2].hist(true_m4j.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+    nbins = int(round(max(rec_m4j.flatten().numpy()) - min(rec_m4j.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+    ax[1,2].hist(rec_m4j.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
+    ax[1, 2].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
     
-    #ax[0].hist(true_val[:, 0, :].flatten().numpy() - true_val[:, 1, :].flatten().numpy(), color = "darkorange", label = "px - py", histtype = "step", bins = nbins)
-    #ax[0].hist(true_val[:, 0, :].flatten().numpy() + true_val[:, 1, :].flatten().numpy(), color = "forestgreen", label = "px + py", histtype = "step", bins = nbins)
-    
-    ax[2].set_yscale("log")
-    ax[3].set_yscale("log")
-    ax[0].set_xlim(-250, 250)
-    ax[1].set_xlim(-250, 250)
+    ax[0, 0].set_xlim(-250, 250); ax[0,1].set_xlim(-250, 250)
+    ax[0, 2].set_yscale("log"); ax[0,3].set_yscale("log"); ax[1,0].set_yscale("log"); ax[1,1].set_yscale("log"); ax[1,2].set_yscale("log")
+    ax[1, 0].set_xlabel('$p_{T}\ ({\\rm GeV})$')
+    ax[1, 1].set_xlabel('$m_{2j}\ ({\\rm GeV})$')
+    ax[1, 2].set_xlabel('Reco $m_{4j}\ ({\\rm GeV})$')
+
     #ax[3].set_xlim(-100, 1000)
-    ax[0].legend(loc = "best")
+    ax[0,0].legend(loc = "best")
     fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
     path = f"plots/redec/{sample}/"
@@ -501,7 +565,7 @@ def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, offse
 
     
     fig, ax = plt.subplots(1, 7, figsize = (15, 5))
-    for j, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$", "$\\theta$", "$\log{(p_{T}\ [{\\rm GeV}])}$"]):
+    for j, feature in enumerate(["$p_{T}\ ({\\rm GeV})$", "$\eta$", "$\phi$", "$\\theta$", "$\log{(p_{T}\ [{\\rm GeV}])}$"]):
         if j == 3:
             width = 0.25 # GeV
             nbins = int(round(max(true_theta.flatten().numpy()) - min(true_theta.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
@@ -563,7 +627,7 @@ def plot_loss_distr(j, loss_distr, loss_weights, offset, epoch, sample, network_
     cbar_ax = fig.add_axes([0.96, 0.1, 0.01, 0.8])
     vmax_mob = 0
 
-    for j, feature in enumerate(["$p_{T}\ ({\\rm GeV)}$", "$\eta$", "$\phi$"]):
+    for j, feature in enumerate(["$p_{T}\ ({\\rm GeV})$", "$\eta$", "$\phi$"]):
 
 
         '''
@@ -642,7 +706,6 @@ def plot_etaPhi_plane(true_val, reco_val, offset, epoch, sample, network_name): 
     ax.set_xlabel('$\eta$')
     ax.set_ylabel('$\phi$')
 
-    #fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
     fig.tight_layout()
     fig.suptitle(f'Epoch {epoch}')
     ax.legend(loc='best')
