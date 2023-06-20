@@ -106,25 +106,45 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
     plt.close()
 
 
-def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, phi_rot, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
+def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, phi_rot, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     #from fast_histogram import histogram2d
 
+    plot_masses = True
+    if plot_masses:
+        d_rot, dPxPyPzE_rot = networks.addFourVectors(  networks.PtEtaPhiM(true_val)[:,:,(0,2,0,1,0,1)], 
+                                                        networks.PtEtaPhiM(true_val)[:,:,(1,3,2,3,3,2)])
+        q_rot, qPxPyPzE_rot = networks.addFourVectors(  d_rot[:,:,(0,2,4)],
+                                                        d_rot[:,:,(1,3,5)], 
+                                                        v1PxPyPzE = dPxPyPzE_rot[:,:,(0,2,4)],
+                                                        v2PxPyPzE = dPxPyPzE_rot[:,:,(1,3,5)])
+        m2j = d_rot[:, 3:4, :]
+        m4j = q_rot[:, 3:4, 0]
+
+        rec_d, rec_dPxPyPzE = networks.addFourVectors(  networks.PtEtaPhiM(reco_val)[:,:,(0,2,0,1,0,1)], 
+                                                        networks.PtEtaPhiM(reco_val)[:,:,(1,3,2,3,3,2)])
+        rec_q, rec_qPxPyPzE = networks.addFourVectors(  rec_d[:,:,(0,2,4)],
+                                                        rec_d[:,:,(1,3,5)])
+        rec_m2j = rec_d[:, 3:4, :]
+        rec_m4j = rec_q[:, 3:4, 0]
+
+        true_m2j = m2j.detach()
+        reco_m2j = rec_m2j.detach()
+        res_m2j = reco_m2j - true_m2j
+
+        true_m4j = m4j.detach()
+        reco_m4j = rec_m4j.detach()
+        res_m4j = reco_m4j - true_m4j
+
     true_val = true_val.detach()
     reco_val = reco_val.detach()
     res = reco_val - true_val
     res_norm = res / true_val
 
-    true_m2j = m2j.detach()
-    reco_m2j = rec_m2j.detach()
-    res_m2j = reco_m2j - true_m2j
 
-    true_m4j = m4j.detach()
-    reco_m4j = rec_m4j.detach()
-    res_m4j = reco_m4j - true_m4j
 
     true_pt = ((true_val[:, 0:1, :]**2 + true_val[:, 1:2, :]**2).sqrt()).detach()
     reco_pt = ((reco_val[:, 0:1, :]**2 + reco_val[:, 1:2, :]**2).sqrt()).detach()
@@ -191,25 +211,47 @@ def plot_training_residuals_PxPyPzEm2jm4jPt(true_val, reco_val, m2j, rec_m2j, m4
     plt.close()
 
 
-def plot_training_residuals_PtEtaPhiEm2jm4j(true_val, reco_val, m2j, rec_m2j, m4j, rec_m4j, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
+def plot_training_residuals_PtEtaPhiEm2jm4j(true_val, reco_val, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     #from fast_histogram import histogram2d
+    plot_masses = True
+    if plot_masses:
+        d_rot, dPxPyPzE_rot = networks.addFourVectors(  true_val[:,:,(0,2,0,1,0,1)], 
+                                                        true_val[:,:,(1,3,2,3,3,2)])
+        q_rot, qPxPyPzE_rot = networks.addFourVectors(  d_rot[:,:,(0,2,4)],
+                                                        d_rot[:,:,(1,3,5)], 
+                                                        v1PxPyPzE = dPxPyPzE_rot[:,:,(0,2,4)],
+                                                        v2PxPyPzE = dPxPyPzE_rot[:,:,(1,3,5)])
+        m2j = d_rot[:, 3:4, :]
+        m4j = q_rot[:, 3:4, 0]
+
+        rec_d, rec_dPxPyPzE = networks.addFourVectors(  reco_val[:,:,(0,2,0,1,0,1)], 
+                                                        reco_val[:,:,(1,3,2,3,3,2)])
+        rec_q, rec_qPxPyPzE = networks.addFourVectors(  rec_d[:,:,(0,2,4)],
+                                                        rec_d[:,:,(1,3,5)])
+        rec_m2j = rec_d[:, 3:4, :]
+        rec_m4j = rec_q[:, 3:4, 0]
+
+        true_m2j = m2j.detach()
+        reco_m2j = rec_m2j.detach()
+        res_m2j = reco_m2j - true_m2j
+
+        true_m4j = m4j.detach()
+        reco_m4j = rec_m4j.detach()
+        res_m4j = reco_m4j - true_m4j
+
 
     true_val = true_val.detach()
     reco_val = reco_val.detach()
     res = reco_val - true_val
     res_norm = res / true_val
 
-    true_m2j = m2j.detach()
-    reco_m2j = rec_m2j.detach()
-    res_m2j = reco_m2j - true_m2j
+    
 
-    true_m4j = m4j.detach()
-    reco_m4j = rec_m4j.detach()
-    res_m4j = reco_m4j - true_m4j
+    
 
     #cmap = cm.get_cmap("bwr")
     cmap = cm.get_cmap("viridis")
@@ -233,7 +275,7 @@ def plot_training_residuals_PtEtaPhiEm2jm4j(true_val, reco_val, m2j, rec_m2j, m4
         
         if i ==0:
             h2d, xbins, ybins, im = ax[i, j].hist2d(true_val[:, j, :].flatten().numpy(), res[:, j, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
-        elif i == 1:
+        elif i == 1 and plot_masses:
             h2d, xbins, ybins, im = ax[1, 0].hist2d(true_m2j[:, :, :].flatten().numpy(), res_m2j[:, :, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
             h2d, xbins, ybins, im = ax[1, 1].hist2d(true_m4j[:, :].flatten().numpy(), res_m4j[:, :].flatten().numpy(), cmap=cmap, norm = matplotlib.colors.LogNorm(vmax = 2000), bins = (50, 50))
 
@@ -587,18 +629,21 @@ def plot_etaPhi_plane(true_val, reco_val, offset, epoch, sample, network_name): 
     cmap = cm.get_cmap("viridis")
     #cc.cm["CET_L17"].copy()
     
-    fig, ax = plt.subplots(1, figsize = (15, 5))
+    fig, ax = plt.subplots(1, figsize = (10, 10))
     for j in range(4):
         ax.plot((eta_true[j], eta_rec[j]), (phi_true[j], phi_rec[j]), lw = 2, ls = 'dashed', color = 'grey')
     ax.scatter(eta_true, phi_true, s=pt_true, color = 'red', label = f'True {pos} event')
     ax.scatter(eta_rec, phi_rec, s=pt_rec, color = 'blue', label = f'Reco {pos} event')
+    ax.set_xlim(-3, 3)
+    ax.set_ylim(-np.pi, np.pi)
     ax.tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
     ax.minorticks_on()
     ax.tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
     ax.set_xlabel('$\eta$')
     ax.set_ylabel('$\phi$')
 
-    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
+    #fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.4, hspace = 0.4)
+    fig.tight_layout()
     fig.suptitle(f'Epoch {epoch}')
     ax.legend(loc='best')
     path = f"plots/redec/{sample}/"

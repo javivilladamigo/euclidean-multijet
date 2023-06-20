@@ -414,39 +414,20 @@ class Basic_CNN_AE(nn.Module):
         self.select_dec             = Ghost_Batch_Norm(self.d * 4, features_out=1, conv=True, bias=False, device = self.device)
 
         self.decode_j = Ghost_Batch_Norm(self.d, features_out=4, conv = True, device = self.device)
-        '''
-        self.decode_j = nn.Sequential(
-            nn.Linear(self.d, out_features = 100, device = self.device),
-            nn.LeakyReLU(),
+        
+        self.decode_j2 = nn.Sequential(
+            nn.Linear(4, out_features = 100, device = self.device),
+            nn.PReLU(),
             nn.Linear(100, out_features = 4, device = self.device),
-            nn.Tanh()
-        )
-        '''
-
-
-        '''
-        self.decode_Px              = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 100, device = self.device),
-            nn.BatchNorm1d(100),
             nn.PReLU(),
-            nn.Dropout(p=0.2),
-            nn.Linear(in_features = 100, out_features = 4, device = self.device),
-            nn.Sigmoid()
-        )
-        self.decode_Py             = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 100, device = self.device),
-            nn.BatchNorm1d(100),
-            nn.PReLU(),
-            nn.Dropout(p=0.2),
-            nn.Linear(in_features = 100, out_features = 4, device = self.device),
-            nn.Tanh()
         )
         
-        self.decode_PxPy            = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 60, device = self.device),
+
+
+
+        self.decode_Px            = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            nn.BatchNorm1d(32),
             nn.PReLU(),
             nn.Dropout(p = 0.1),
             #nn.Linear(in_features = 60, out_features = 70, device = self.device),
@@ -456,30 +437,56 @@ class Basic_CNN_AE(nn.Module):
             #nn.PReLU(),
             #nn.Linear(in_features = 80, out_features = 85, device = self.device),
             #nn.PReLU(),
-            nn.Linear(in_features = 60, out_features = 8, device = self.device),
-
-
+            nn.Linear(in_features = 32, out_features = 4, device = self.device),
         )
-
-
-        self.decode_Pz             = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 100, device = self.device),
-            nn.BatchNorm1d(100),
+        self.decode_Py            = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            nn.BatchNorm1d(32),
             nn.PReLU(),
-            nn.Dropout(p=0.2),
-            nn.Linear(in_features = 100, out_features = 4, device = self.device),
-        )
-        self.decode_E               = nn.Sequential(
-            nn.Flatten(start_dim = 1),
-            nn.Linear(in_features = 21, out_features = 100, device = self.device),
-            #nn.Dropout(p = 0.2),
-            nn.BatchNorm1d(100),
+            nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 60, out_features = 70, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 70, out_features = 80, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.PReLU(),
+            #nn.Linear(in_features = 80, out_features = 85, device = self.device),
+            #nn.PReLU(),
+            nn.Linear(in_features = 32, out_features = 4, device = self.device),
             nn.PReLU(),
-            nn.Dropout(p=0.2),
-            nn.Linear(in_features = 100, out_features = 4, device = self.device),
         )
         '''
+        self.decode_PxPy            = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            nn.BatchNorm1d(32),
+            nn.PReLU(),
+            nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 60, out_features = 70, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 70, out_features = 80, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.PReLU(),
+            #nn.Linear(in_features = 80, out_features = 85, device = self.device),
+            #nn.PReLU(),
+            nn.Linear(in_features = 32, out_features = 8, device = self.device),
+        )
+        '''
+
+        self.decode_Pz             = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            nn.BatchNorm1d(32),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 32, out_features = 4, device = self.device),
+        )
+        self.decode_E               = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.BatchNorm1d(32),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 32, out_features = 4, device = self.device),
+        )
+        
 
 
 
@@ -515,6 +522,7 @@ class Basic_CNN_AE(nn.Module):
         
         
         # remove and return from Input_Embed
+        '''
         d_rot, dPxPyPzE_rot = addFourVectors(   j_rot[:,:,(0,2,0,1,0,1)], 
                                                         j_rot[:,:,(1,3,2,3,3,2)])
         q_rot, qPxPyPzE_rot = addFourVectors(   d_rot[:,:,(0,2,4)],
@@ -523,6 +531,7 @@ class Basic_CNN_AE(nn.Module):
                                                         v2PxPyPzE = dPxPyPzE_rot[:,:,(1,3,5)])
         m2j = d_rot[:, 3:4, :]
         m4j = q_rot[:, 3:4, 0]
+        '''
 
         # convert to PxPyPzE and compute means and variances
         jPxPyPzE = PxPyPzE(j_rot)
@@ -564,18 +573,20 @@ class Basic_CNN_AE(nn.Module):
         # conv kernel 1
         dec_j = NonLU(self.decode_j(dec_j)) # NonLU ?                                           # 4x4
         
-        sign_p = torch.cat((dec_j[:, 0:3, :].sign(), torch.ones(j.shape[0], 1, 4)), dim = 1)
-        sign_p[sign_p == 0.0] += 1.
+        #sign_p = torch.cat((dec_j[:, 0:3, :].sign(), torch.ones(j.shape[0], 1, 4)), dim = 1)
+        #sign_p[sign_p == 0.0] += 1.
+        #rec_j = sign_p * (torch.exp(torch.abs(dec_j)) - 1)
+        rec_Px = self.decode_Px(dec_j.view(-1, 16)).view(-1, 1, 4)
+        rec_Py = self.decode_Py(dec_j.view(-1, 16)).view(-1, 1, 4)
+        rec_Pz = self.decode_Pz(dec_j.view(-1, 16)).view(-1, 1, 4)
+        rec_E = self.decode_E(dec_j.view(-1, 16)).view(-1, 1, 4)
+        rec_j = torch.cat((rec_Px, rec_Py, rec_Pz, rec_E), 1)
 
-
-        rec_j = sign_p * (torch.exp(torch.abs(dec_j)) - 1)
-
-        '''
         rec_jPxPyPzE = torch.zeros(*rec_j.shape, 24)
         for k, perm in enumerate(list(itertools.permutations([0,1,2,3]))):
                 rec_jPxPyPzE[:, :, :, k] = rec_j[:, :, perm] 
-        '''
-        rec_jPxPyPzE = rec_j
+
+
 
 
         # either do nothing or compute the 16 losses
@@ -609,13 +620,14 @@ class Basic_CNN_AE(nn.Module):
             jPxPyPzE_sc[:, i, :] = (jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
             rec_jPxPyPzE_sc[:, i, :] = (rec_jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
         '''
-        
+        '''
         rec_d, rec_dPxPyPzE = addFourVectors(   PtEtaPhiM(rec_jPxPyPzE)[:,:,(0,2,0,1,0,1)], 
                                                 PtEtaPhiM(rec_jPxPyPzE)[:,:,(1,3,2,3,3,2)])
         rec_q, rec_qPxPyPzE = addFourVectors(   rec_d[:,:,(0,2,4)],
                                                 rec_d[:,:,(1,3,5)])
         rec_m2j = rec_d[:, 3:4, :]
         rec_m4j = rec_q[:, 3:4, 0]
+        '''
 
         '''
         m2j_sc = m2j.clone()                                                                # [batch_size, 1, 6]
@@ -638,7 +650,7 @@ class Basic_CNN_AE(nn.Module):
 
             
         
-        return rec_jPxPyPzE, jPxPyPzE, rec_m2j, m2j, rec_m4j, m4j, dec_d, d, dec_q, q
+        return jPxPyPzE, rec_jPxPyPzE
 
 
 
