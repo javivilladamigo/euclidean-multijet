@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import itertools
 
 torch.manual_seed(0)#make training results repeatable 
 
@@ -12,7 +13,7 @@ def vector_print(vector, end='\n'):
 
     
 class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has what seem like typos in GBN definition. 
-    def __init__(self, features, ghost_batch_size=32, number_of_ghost_batches=64, n_averaging=1, stride=1, eta=0.9, bias=True, device='cpu', name='', conv=False, features_out=None):
+    def __init__(self, features, ghost_batch_size=32, number_of_ghost_batches=64, n_averaging=1, stride=1, eta=0.9, bias=True, device='cpu', name='', conv=False, features_out=None): # number_of_ghost_batches was initially set to 64
         super(Ghost_Batch_Norm, self).__init__()
         self.name = name
         self.index = None
@@ -84,7 +85,8 @@ class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has w
         pixel_groups = pixels//self.stride
 
         if self.training and self.n_ghost_batches!=0:
-            self.ghost_batch_size = batch_size // self.n_ghost_batches.abs()
+            # this has been changed from self.ghost_batch_size = batch_size // self.n_ghost_batches.abs()
+            self.ghost_batch_size = torch.div(batch_size, self.n_ghost_batches.abs(), rounding_mode = 'trunc')
 
             #
             # Apply batch normalization with Ghost Batch statistics
@@ -176,7 +178,6 @@ def PxPyPzE(v): # need this to be able to add four-vectors
 
     return torch.cat( (Px,Py,Pz,E), 1 )
 
-
 def PtEtaPhiM(v):
     px = v[:,0:1]
     py = v[:,1:2]
@@ -184,8 +185,7 @@ def PtEtaPhiM(v):
     e  = v[:,3:4]
 
     Pt  = (px**2+py**2).sqrt()
-    ysign = py.sign()
-    ysign = ysign + (ysign==0.0).float() # if py==0, px==Pt and acos(1)=pi/2 so we need zero protection on py.sign()
+    ysign = 1-2*(py<0).float() # if py==0, px==Pt and acos(1)=pi/2 so we need zero protection on py.sign() --> changed to the current shape to avoid 0-gradient of .sign()
     Phi = (px/Pt).acos() * ysign
     Eta = (pz/Pt).asinh()
 
@@ -193,7 +193,6 @@ def PtEtaPhiM(v):
 
     return torch.cat( (Pt, Eta, Phi, M) , 1 ) 
     
-
 def addFourVectors(v1, v2, v1PxPyPzE=None, v2PxPyPzE=None): # output added four-vectors
     #vX[batch index, (pt,eta,phi,m), object index]
 
@@ -207,6 +206,32 @@ def addFourVectors(v1, v2, v1PxPyPzE=None, v2PxPyPzE=None): # output added four-
 
     return v12, v12PxPyPzE
 
+def calcDeltaPhi(v1, v2): #expects eta, phi representation
+    dPhi12 = (v1[:,2:3]-v2[:,2:3])%math.tau
+    dPhi21 = (v2[:,2:3]-v1[:,2:3])%math.tau
+    dPhi = torch.min(dPhi12,dPhi21)
+    return dPhi
+
+def setLeadingEtaPositive(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
+    etaSign = 1-2*(batched_v[:,1,0:1]<0).float() # -1 if eta is negative, +1 if eta is zero or positive
+    batched_v[:,1,:] = etaSign * batched_v[:,1,:]
+    return batched_v
+
+def setLeadingPhiTo0(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
+    # set phi = 0 for the leading jet and rotate the event accordingly
+    phi_ref = batched_v[:,2,0:1] # get the leading jet phi for each event
+    batched_v[:,2,:] = batched_v[:,2,:] - phi_ref # rotate all phi to make phi_lead = 0
+    batched_v[:,2,:][batched_v[:,2,:]>torch.pi] -= 2*torch.pi # retransform the phi that are > pi
+    batched_v[:,2,:][batched_v[:,2,:]<-torch.pi] += 2*torch.pi # same for the phi that are < -pi
+    return batched_v
+
+def setSubleadingPhiPositive(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
+    batched_v[:,2,1:4][batched_v[:,2,1]<0] += torch.pi # starting from phi2, add pi to j2, j3, j4 if phi2 < 0
+    batched_v[:,2,:][batched_v[:,2,:]>torch.pi] -= 2*torch.pi # retransform the phi that are > pi
+
+    #phiSign = 1-2*(batched_v[:,2,1:2]<0).float() # -1 if phi2 is negative, +1 if phi2 is zero or positive
+    #batched_v[:,2,1:4] = phiSign * batched_v[:,2,1:4]
+    return batched_v
 
 #
 # Some different non-linear units
@@ -233,38 +258,30 @@ class Input_Embed(nn.Module):
         self.device = device
 
         # embed inputs to dijetResNetBlock in target feature space
-        self.jet_embed     = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='jet embedder', device=self.device) # phi is relative to dijet, mass is zero in toy data
+        self.jet_embed     = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='jet embedder', device=self.device) # phi is relative to dijet, mass is zero in toy data. # 3 features -> 8 features
         self.jet_conv      = Ghost_Batch_Norm(self.d, conv=True, name='jet convolution', device = self.device)
 
-        self.dijet_embed   = Ghost_Batch_Norm(4, features_out=self.d, conv=True, name='dijet embedder', device = self.device) # phi is relative to quadjet
+        self.dijet_embed   = Ghost_Batch_Norm(4, features_out=self.d, conv=True, name='dijet embedder', device = self.device) # phi is relative to quadjet, # 4 features -> 8 features
         self.dijet_conv    = Ghost_Batch_Norm(self.d, conv=True, name='dijet convolution', device = self.device) 
 
-        self.quadjet_embed = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='quadjet embedder', device = self.device) # phi is removed
+        self.quadjet_embed = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='quadjet embedder', device = self.device) # phi is removed. # 3 features -> 8 features
         self.quadjet_conv  = Ghost_Batch_Norm(self.d, conv=True, name='quadjet convolution', device = self.device)
 
-        self.register_buffer('tau', torch.tensor(math.tau, dtype=torch.float))
+        #self.register_buffer('tau', torch.tensor(math.tau, dtype=torch.float))
 
-    def calcDeltaPhi(self, v1, v2): #expects eta, phi representation
-        dPhi12 = (v1[:,2:3]-v2[:,2:3])%self.tau
-        dPhi21 = (v2[:,2:3]-v1[:,2:3])%self.tau
-        dPhi = torch.min(dPhi12,dPhi21)
-        return dPhi
+    
         
     def data_prep(self, j):
         j = j.clone()# prevent overwritting data from dataloader when doing operations directly from RAM rather than copying to VRAM
         j = j.view(-1,4,4)
 
-        # make leading jet eta positive direction so detector absolute eta info is removed
-        etaSign = 1-2*(j[:,1,0:1]<0).float() # -1 if eta is negative, +1 if eta is zero or positive
-        j[:,1,:] = etaSign * j[:,1,:]
-        
-        d, dPxPyPzE = addFourVectors(j[:,:,(0,2,0,1,0,1)], 
+        d, dPxPyPzE = addFourVectors(j[:,:,(0,2,0,1,0,1)], # 6 pixels
                                      j[:,:,(1,3,2,3,3,2)])
 
         q, qPxPyPzE = addFourVectors(d[:,:,(0,2,4)],
                                      d[:,:,(1,3,5)], 
                                      v1PxPyPzE = dPxPyPzE[:,:,(0,2,4)],
-                                     v2PxPyPzE = dPxPyPzE[:,:,(1,3,5)])        
+                                     v2PxPyPzE = dPxPyPzE[:,:,(1,3,5)])
 
         # take log of pt, mass variables which have long tails
         j[:,(0,3),:] = torch.log(1+j[:,(0,3),:])
@@ -274,12 +291,14 @@ class Input_Embed(nn.Module):
         # set up all possible jet pairings
         j = torch.cat([j, j[:,:,(0,2,1,3)], j[:,:,(0,3,1,2)]],2)
 
+        
         # only keep relative angular information so that learned features are invariant under global phi rotations and eta/phi flips
-        j[:,2:3,(0,2,4,6,8,10)] = self.calcDeltaPhi(d, j[:,:,(0,2,4,6,8,10)]) # replace jet phi with deltaPhi between dijet and jet
-        j[:,2:3,(1,3,5,7,9,11)] = self.calcDeltaPhi(d, j[:,:,(1,3,5,7,9,11)])
-
-        d[:,2:3,(0,2,4)] = self.calcDeltaPhi(q, d[:,:,(0,2,4)])
-        d[:,2:3,(1,3,4)] = self.calcDeltaPhi(q, d[:,:,(1,3,5)])
+        j[:,2:3,(0,2,4,6,8,10)] = calcDeltaPhi(d, j[:,:,(0,2,4,6,8,10)]) # replace jet phi with deltaPhi between dijet and jet
+        j[:,2:3,(1,3,5,7,9,11)] = calcDeltaPhi(d, j[:,:,(1,3,5,7,9,11)])
+        
+        
+        d[:,2:3,(0,2,4)] = calcDeltaPhi(q, d[:,:,(0,2,4)])
+        d[:,2:3,(1,3,4)] = calcDeltaPhi(q, d[:,:,(1,3,5)])
 
         q = torch.cat( (q[:,:2,:],q[:,3:,:]) , 1 ) # remove phi from quadjet features
 
@@ -366,29 +385,500 @@ class Basic_CNN(nn.Module):
 
         return c_logits, q_logits
 
+
+class Basic_CNN_AE(nn.Module):
+    def __init__(self, dimension, phi_rotations, out_features = 12, device = 'cpu'):
+        super(Basic_CNN_AE, self).__init__()
+        self.device = device
+        self.d = dimension
+        self.out_features = out_features
+        self.phi_rotations = phi_rotations
+        self.n_ghost_batches = 64
+
+
+
+        self.name = f'Basic_CNN_AE_{self.d}'
+
+        self.input_embed            = Input_Embed(self.d)
+        self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device = self.device)
+        self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+
+
+
+        self.decode_q               = nn.ConvTranspose1d(self.d, self.d, kernel_size = 3)
+        self.dijets_from_quadjets   = nn.ConvTranspose1d(self.d, self.d, kernel_size = 2, stride = 2)
+        #self.decode_d               = nn.ConvTranspose1d(self.d, self.d, 6)
+        self.jets_from_dijets       = nn.ConvTranspose1d(self.d, self.d, kernel_size = 2, stride = 2)
+        #self.decode_j               = nn.ConvTranspose1d(self.d, self.d, 12)
+        self.select_dec             = Ghost_Batch_Norm(self.d * 4, features_out=1, conv=True, bias=False, device = self.device)
+
+        self.decode_j = Ghost_Batch_Norm(self.d, features_out=4, conv = True, device = self.device)
+        
+
+
+
+        self.decode_Px            = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            nn.BatchNorm1d(32),
+            nn.PReLU(),
+            nn.Dropout(p = 0.2),
+            #nn.Linear(in_features = 60, out_features = 70, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 70, out_features = 80, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.PReLU(),
+            #nn.Linear(in_features = 80, out_features = 85, device = self.device),
+            #nn.PReLU(),
+            nn.Linear(in_features = 32, out_features = 4, device = self.device),
+        )
+        self.decode_Py            = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            nn.BatchNorm1d(32),
+            nn.PReLU(),
+            nn.Dropout(p = 0.2),
+            #nn.Linear(in_features = 60, out_features = 70, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 70, out_features = 80, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.PReLU(),
+            #nn.Linear(in_features = 80, out_features = 85, device = self.device),
+            #nn.PReLU(),
+            nn.Linear(in_features = 32, out_features = 4, device = self.device),
+        )
+        '''
+        self.decode_PxPy            = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            nn.BatchNorm1d(32),
+            nn.PReLU(),
+            nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 60, out_features = 70, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.Linear(in_features = 70, out_features = 80, device = self.device),
+            #nn.Dropout(p = 0.1),
+            #nn.PReLU(),
+            #nn.Linear(in_features = 80, out_features = 85, device = self.device),
+            #nn.PReLU(),
+            nn.Linear(in_features = 32, out_features = 8, device = self.device),
+        )
+        '''
+
+        self.decode_Pz             = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            nn.BatchNorm1d(32),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 32, out_features = 4, device = self.device),
+        )
+        self.decode_E               = nn.Sequential(
+            nn.Linear(in_features = 16, out_features = 32, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.BatchNorm1d(32),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 32, out_features = 4, device = self.device),
+        )
+        
+
+
+
+
+
+
+
+    
+    def set_mean_std(self, j):
+        self.input_embed.set_mean_std(j)
+
+    
+    def set_ghost_batches(self, n_ghost_batches):
+        self.input_embed.set_ghost_batches(n_ghost_batches)
+        self.jets_to_dijets.set_ghost_batches(n_ghost_batches)
+        self.dijets_to_quadjets.set_ghost_batches(n_ghost_batches)
+        self.select_q.set_ghost_batches(n_ghost_batches)
+        self.n_ghost_batches = n_ghost_batches
+
+    
+    def forward(self, j):
+              # j.shape = [batch_size, 4, 4]
+        #j[torch.all(j[:, 0]>40, axis = 1)] # pt > 30 GeV
+        j_rot = j.clone()
+
+        # make leading jet eta positive direction so detector absolute eta info is removed
+        # set phi = 0 for the leading jet and rotate the event accordingly
+        # set phi1 > 0 by flipping wrt the xz plane
+
+        # maybe rotate the jets at the end, or take it out. Also it could be possible to rotate jets at the end to match the initial jets
+        
+        j_rot = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rot))) if self.phi_rotations else j_rot
+        
+        
+        # remove and return from Input_Embed
+        '''
+        d_rot, dPxPyPzE_rot = addFourVectors(   j_rot[:,:,(0,2,0,1,0,1)], 
+                                                        j_rot[:,:,(1,3,2,3,3,2)])
+        q_rot, qPxPyPzE_rot = addFourVectors(   d_rot[:,:,(0,2,4)],
+                                                        d_rot[:,:,(1,3,5)], 
+                                                        v1PxPyPzE = dPxPyPzE_rot[:,:,(0,2,4)],
+                                                        v2PxPyPzE = dPxPyPzE_rot[:,:,(1,3,5)])
+        m2j = d_rot[:, 3:4, :]
+        m4j = q_rot[:, 3:4, 0]
+        '''
+
+        # convert to PxPyPzE and compute means and variances
+        jPxPyPzE = PxPyPzE(j_rot)
+                                                                                                
+                                                                                                # j_rot.shape = [batch_size, 4, 4]
+        j, d, q = self.input_embed(j_rot)                                             # j.shape = [batch_size, 8, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2
+                                                                                                # d.shape = [batch_size, 8, 6]  -> 6 = 01 23 02 13 03 12
+                                                                                                # q.shape = [batch_size, 8, 3]  -> 3 = 0123 0213 0312; 3 pixels each with 8 features
+        d = d + NonLU(self.jets_to_dijets(j))                                                   # d.shape = [batch_size, 8, 6]
+        q = q + NonLU(self.dijets_to_quadjets(d))                                               # q.shape = [batch_size, 8, 3]
+        #compute a score for each event quadjet
+        q_logits = self.select_q(q)                                                             # q_logits.shape = [batch_size, 1, 3] -> 3 = 0123 0213 0312
+        #convert the score to a 'probability' with softmax. This way the classifier is learning which pairing is most relevant to the classification task at hand.
+        q_score = F.softmax(q_logits, dim=-1)                                                   # q_score.shape = [batch_size, 1, 3]
+        q_logits = q_logits.view(-1, 3)                                                         # q_logits.shape = [batch_size, 3, 1]
+        #add together the quadjets with their corresponding probability weight
+        e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1] (8x3 · 3x1 = 8x1)
+
+
+
+        #print(e.shape)
+
+        dec_q = NonLU(self.decode_q(e))                                                         # dec_q.shape = [batch_size, 8, 3] 0123 0213 0312
+        dec_d =  NonLU(self.dijets_from_quadjets(dec_q))                                        # dec_d.shape = [batch_size, 8, 6] 01 23 02 13 03 12
+        dec_j = NonLU(self.jets_from_dijets(dec_d))                                             # dec_j.shape = [batch_size, 8, 12]; dec_j is interpreted as jets 0 1 2 3 0 2 1 3 0 3 1 2
+        
+        dec_j = dec_j.view(-1, self.d, 3, 4)                                                    # last index is jet 
+        dec_j = dec_j.transpose(-1, -2)                                                         # last index is pairing history now 
+        dec_j = dec_j.contiguous().view(-1, self.d * 4, 3)                                      # 32 numbers corresponding to each pairing: which means that you have 8 numbers corresponding to each jet in each pairing concatenated along the same dimension
+                                                                                                # although this is not exact because now the information between jets is mixed, but thats the idea
+        dec_j_logits = self.select_dec(dec_j)
+        
+        dec_j_score = F.softmax(dec_j_logits, dim = -1)                                         # 1x3
+
+        dec_j = torch.matmul(dec_j, dec_j_score.transpose(1, 2))                                # (32x3 · 3x1 = 32x1)
+        
+        dec_j = dec_j.view(-1, self.d, 4)                                                       # 8x4
+        
+        # conv kernel 1
+        dec_j = NonLU(self.decode_j(dec_j)) # NonLU ?                                           # 4x4
+        
+        #sign_p = torch.cat((dec_j[:, 0:3, :].sign(), torch.ones(j.shape[0], 1, 4)), dim = 1)
+        #sign_p[sign_p == 0.0] += 1.
+        #rec_j = sign_p * (torch.exp(torch.abs(dec_j)) - 1)
+        rec_Px = self.decode_Px(dec_j.view(-1, 16)).view(-1, 1, 4)
+        rec_Py = self.decode_Py(dec_j.view(-1, 16)).view(-1, 1, 4)
+        rec_Pz = self.decode_Pz(dec_j.view(-1, 16)).view(-1, 1, 4)
+        rec_E = self.decode_E(dec_j.view(-1, 16)).view(-1, 1, 4)
+        rec_j = torch.cat((rec_Px, rec_Py, rec_Pz, rec_E), 1)
+
+        rec_jPxPyPzE = torch.zeros(*rec_j.shape, 24)
+        for k, perm in enumerate(list(itertools.permutations([0,1,2,3]))):
+                rec_jPxPyPzE[:, :, :, k] = rec_j[:, :, perm] 
+
+
+
+
+        # either do nothing or compute the 16 losses
+        
+        '''
+        sorted_indices = PtEtaPhiM(rec_jPxPyPzE)[:,0,:].sort(descending = True, dim = 1)[1]
+        for b in range(j.shape[0]):
+            rec_jPxPyPzE[b, :, sorted_indices[b]]
+        rec_jPxPyPzE[:, 1, 0] = 0 # leading Py = 0
+        '''
+
+        '''print("q:", q[0].data, dec_q[0].data)
+        print("d:", d[0].data, dec_d[0].data)
+        print("dec_j:", dec_j[0].data)
+        print("sign:", sign_p[0].data)
+        print("rec_jPxPyPzE:", rec_jPxPyPzE[0].data)'''
+        
+
+     
+     
+
+
+
+
+
+        
+        '''
+        rec_jPxPyPzE_sc = rec_jPxPyPzE.clone()
+        for i in range(len(jPxPyPzE[0, :, 0])):
+            # obtained a normalized j for the computation of the loss
+            jPxPyPzE_sc[:, i, :] = (jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
+            rec_jPxPyPzE_sc[:, i, :] = (rec_jPxPyPzE[:, i, :] - batch_mean[i]) / batch_std[i]
+        '''
+        '''
+        rec_d, rec_dPxPyPzE = addFourVectors(   PtEtaPhiM(rec_jPxPyPzE)[:,:,(0,2,0,1,0,1)], 
+                                                PtEtaPhiM(rec_jPxPyPzE)[:,:,(1,3,2,3,3,2)])
+        rec_q, rec_qPxPyPzE = addFourVectors(   rec_d[:,:,(0,2,4)],
+                                                rec_d[:,:,(1,3,5)])
+        rec_m2j = rec_d[:, 3:4, :]
+        rec_m4j = rec_q[:, 3:4, 0]
+        '''
+
+        '''
+        m2j_sc = m2j.clone()                                                                # [batch_size, 1, 6]
+        m4j_sc = m4j.clone()                                                                # [batch_size, 1]
+        
+        m2j_mean = m2j.mean(dim = (0, 1))                                                       # [6]
+        m4j_mean = m4j.mean(dim = 0)                                                            # [1]
+        
+        m2j_std = m2j.std(dim = (0, 1))                                                         # [6]
+        m4j_std = m4j.std(dim = 0)                                                              # [1] 
+        
+
+
+        rec_m2j_sc  = rec_m2j.clone()
+        rec_m4j_sc  = rec_m4j.clone()
+        for i in range(len(rec_m2j[0, 0, :])):
+            m2j_sc[:, 0, i] = (m2j_sc[:, 0, i] - m2j_mean[i]) / m2j_std[i]
+            rec_m2j_sc[:, 0, i] = (rec_m2j[:, 0, i] - m2j_mean[i]) / m2j_std[i]
+        '''
+
+            
+        
+        return jPxPyPzE, rec_jPxPyPzE
+
+
+
+
+
+class VAE(nn.Module):
+    def __init__(self, latent_dim, device = 'cpu'):
+        super().__init__()
+        self.device = device
+        self.d = latent_dim
+        self.enc_out_dim = self.d * 2
+        self.n_ghost_batches = 0#16
+
+        self.name = f'VAE_{self.d}'
+        
+        # encoder path
+        self.encoder = Encoder(in_features=3, mult_factor=2, encoded_space_dim = self.enc_out_dim)
+
+        # decoder path
+        self.decode_q               = nn.ConvTranspose1d(self.d, self.d, 3)
+        self.dijets_from_quadjets   = nn.ConvTranspose1d(self.d, self.d, 2, stride = 2)
+        self.decode_d               = nn.ConvTranspose1d(self.d, self.d, 6)
+        self.jets_from_dijets       = nn.ConvTranspose1d(self.d, self.d, 2, stride = 2)
+        self.decode_j               = nn.ConvTranspose1d(self.d, self.d, 12)
+        self.select_dec             = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device = self.device)
+
+
+        # z distribution parameters
+        self.fc_mu = nn.Linear(self.enc_out_dim, self.d)
+        self.fc_var = nn.Linear(self.enc_out_dim, self.d)
+
+
+
+        self.decode_Px              = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.Sigmoid()
+        )
+        self.decode_Py             = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.Tanh()
+
+        )
+        self.decode_Pz             = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            nn.BatchNorm1d(100),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+            nn.Hardtanh(min_val=-torch.pi, max_val=torch.pi)
+        )
+        self.decode_E               = nn.Sequential(
+            nn.Flatten(start_dim = 1),
+            nn.Linear(in_features = 21, out_features = 100, device = self.device),
+            #nn.Dropout(p = 0.2),
+            nn.BatchNorm1d(100),
+            nn.PReLU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(in_features = 100, out_features = 4, device = self.device),
+        )
+
+
+
+
+
+
+        
+        
+        
+
+    
+    def forward(self, j):
+        # j.shape = [batch_size, 4, 4]
+        #j[torch.all(j[:, 0]>40, axis = 1)] # pt > 30 GeV
+        j_rot = j.clone()
+
+        # make leading jet eta positive direction so detector absolute eta info is removed
+        # set phi = 0 for the leading jet and rotate the event accordingly
+        # set phi1 > 0 by flipping wrt the xz plane
+        # j_rot = setSubleadingPhiPositive(setLeadingPhiTo0(setLeadingEtaPositive(j_rot)))
+        
+
+        d_rot, dPxPyPzE_rot = addFourVectors(   j_rot[:,:,(0,2,0,1,0,1)], 
+                                                        j_rot[:,:,(1,3,2,3,3,2)])
+        q_rot, qPxPyPzE_rot = addFourVectors(   d_rot[:,:,(0,2,4)],
+                                                        d_rot[:,:,(1,3,5)], 
+                                                        v1PxPyPzE = dPxPyPzE_rot[:,:,(0,2,4)],
+                                                        v2PxPyPzE = dPxPyPzE_rot[:,:,(1,3,5)])
+        m2j = d_rot[:, 3:4, :]
+        m4j = q_rot[:, 3:4, 0]
+
+
+        e = self.encoder(j_rot[:,0:3,:]) # Energy (=mass) is not used as input
+        e = e.view(-1, self.enc_out_dim)                                                       # [batch_dim, enc_out_dim, 1] --> [batch_dim, enc_out_dim] (typically enc_out_dim = 16)
+
+        mu, log_var = self.fc_mu(e), self.fc_var(e)
+
+
+        # sample z from Q(z|x)
+        std = torch.exp(log_var / 2)
+        #Q = torch.distributions.Normal(mu, std)
+        #z = Q.rsample()
+        mu, std = mu.view(-1, self.d, 1), std.view(-1, self.d, 1)
+        z = mu + std
+        #z = z.view(-1, self.d, 1)                                                          # recover [batch_dim, 8, 1] for decoding
+
+
+        dec_q = self.decode_q(z)                                                                # dec_q.shape = [batch_size, 8, 3]
+        dec_d =  self.decode_d(z) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
+        dec_j = self.decode_j(z) + NonLU(self.jets_from_dijets(dec_d))                          # dec_j.shape = [batch_size, 8, 12]
+        full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
+        selected_dec = self.select_dec(full_dec)
+        
+        rec_Pt = torch.exp(2.5+ 5*self.decode_Px(selected_dec).view(-1, 1, 4))
+        rec_Eta = 4 * self.decode_Py(selected_dec).view(-1, 1, 4)
+        #rec_M = self.decode_E(selected_dec).view(-1, 1, 4)
+        
+
+        rec_Phi = self.decode_Pz(selected_dec).view(-1, 1, 4)
+
+
+
+
+
+
+        #rec_j = (self.simple_dec3(self.simple_dec2(self.simple_dec1(selected_dec)))).view(-1, 4, 4)
+        rec_j = torch.cat((rec_Pt, rec_Eta, rec_Phi), dim = 1)
+
+
+        '''
+        # normalization for loss
+        rec_j_sc = rec_j.clone()
+        for i in range(len(rec_j[0, :, 0])):
+            # obtained a normalized j for the computation of the loss
+            j_sc[:, i, :]   =     (j_rot[:, i, :] - batch_mean[i]) / batch_std[i]
+            rec_j_sc[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
+
+
+
+        e = self.encode(j_rot[:,0:3,:]) # Energy (=mass) is not used as input
+        #print(e.shape)
+
+        dec_q = self.decode_q(e)                                                                # dec_q.shape = [batch_size, 8, 3]
+        dec_d =  self.decode_d(e) + NonLU(self.dijets_from_quadjets(dec_q))                     # dec_d.shape = [batch_size, 8, 6]
+        dec_j = self.decode_j(e) + NonLU(self.jets_from_dijets(dec_d))                          # dec_j.shape = [batch_size, 8, 12]
+        full_dec = torch.cat((dec_q, dec_d, dec_j), dim = 2)
+        selected_dec = self.select_dec(full_dec)
+        rec_Pt = self.decode_Px(selected_dec)
+        rec_Eta = self.decode_Py(selected_dec)
+        rec_Phi = self.decode_Pz(selected_dec)
+        rec_E = self.decode_E(selected_dec)
+        
+        
+        rec_j = torch.cat((rec_Pt, rec_Eta, rec_Phi, rec_E), dim = 2).permute(0,2,1)
+        rec_j_sc = rec_j.clone()
+        for i in range(len(j_rot[0, :, 0])):
+            # obtained a normalized j for the computation of the loss
+            j_sc[:, i, :]   =     (j_rot[:, i, :] - batch_mean[i]) / batch_std[i]
+            rec_j_sc[:, i, :] = (rec_j[:, i, :] - batch_mean[i]) / batch_std[i]
+        
+        
+        rec_d, rec_dPxPyPzE = addFourVectors(   rec_j[:,:,(0,2,0,1,0,1)], 
+                                                rec_j[:,:,(1,3,2,3,3,2)])
+        rec_q, rec_qPxPyPzE = addFourVectors(   rec_d[:,:,(0,2,4)],
+                                                rec_d[:,:,(1,3,5)],
+                                                v1PxPyPzE = rec_dPxPyPzE[:,:,(0,2,4)],
+                                                v2PxPyPzE = rec_dPxPyPzE[:,:,(1,3,5)])
+        rec_m2j = rec_d[:, 3:4, :]
+        rec_m4j = rec_q[:, 3:4, 0]
+
+
+        m2j_sc = m2j.clone()                                                                # [batch_size, 1, 6]
+        m4j_sc = m4j.clone()                                                                # [batch_size, 1]
+        
+        m2j_mean = m2j.mean(dim = (0, 1))                                                       # [6]
+        m4j_mean = m4j.mean(dim = 0)                                                            # [1]
+        
+        m2j_std = m2j.std(dim = (0, 1))                                                         # [6]
+        m4j_std = m4j.std(dim = 0)                                                              # [1] 
+        
+
+
+        rec_m2j_sc  = rec_m2j.clone()
+        rec_m4j_sc  = rec_m4j.clone()
+        for i in range(len(rec_m2j[0, 0, :])):
+            m2j_sc[:, 0, i] = (m2j_sc[:, 0, i] - m2j_mean[i]) / m2j_std[i]
+            rec_m2j_sc[:, 0, i] = (rec_m2j[:, 0, i] - m2j_mean[i]) / m2j_std[i]
+        '''
+            
+        
+        return rec_j, z, mu, std
     
 class K_Fold(nn.Module):
-    def __init__(self, models):
+    def __init__(self, models, task = 'FvT'):
         super(K_Fold, self).__init__()
         self.models = models
         for model in self.models:
             model.eval()
+        self.task = task
 
     @torch.no_grad()
     def forward(self, j, e):
 
-        c_logits = torch.zeros(j.shape[0], self.models[0].n_classes)
-        q_logits = torch.zeros(j.shape[0], 3)
+        if self.task == 'SvB' or self.task == 'FvT': # i.e. if task is classification
+            c_logits = torch.zeros(j.shape[0], self.models[0].n_classes)
+            q_logits = torch.zeros(j.shape[0], 3)
 
-        for offset, model in enumerate(self.models):
-            mask = (e==offset)
-            c_logits[mask], q_logits[mask] = model(j[mask])
+            for offset, model in enumerate(self.models):
+                mask = (e==offset)
+                c_logits[mask], q_logits[mask] = model(j[mask])
 
-        # shift logits to have mean zero over quadjets/classes. Has no impact on output of softmax, just makes logits easier to interpret
-        c_logits = c_logits - c_logits.mean(dim=-1, keepdim=True)
-        q_logits = q_logits - q_logits.mean(dim=-1, keepdim=True)
+            # shift logits to have mean zero over quadjets/classes. Has no impact on output of softmax, just makes logits easier to interpret
+            c_logits = c_logits - c_logits.mean(dim=-1, keepdim=True)
+            q_logits = q_logits - q_logits.mean(dim=-1, keepdim=True)
 
-        return c_logits, q_logits            
+            return c_logits, q_logits
+        
+        elif self.task == 'dec':
+            rec_j = torch.zeros(j.shape[0], 3, 4) # [batch_size, 4jets, 4features]
+
+            for offset, model in enumerate(self.models):
+                #mask = (e==offset)
+                rec_j, rec_j_sc, j_rot, j_sc, rec_m2j, m2j, rec_m4j, m4j = model(j)
+
+            return rec_j
+
 
 
     

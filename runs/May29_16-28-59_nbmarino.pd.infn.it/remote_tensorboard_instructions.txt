@@ -1,0 +1,11 @@
+# 1.SSH into the remote machine with option -L to transfer the port 6006 of the remote server into the port 16005 of my machine:
+
+ssh -L 16006:127.0.0.1:6006 cloudveneto
+
+# What this does is that everything on the port 6006 of the server (in 127.0.0.1:6006) will be forwarded to my machine on the port 16006.
+
+# 2. From local, launch tensorboard on the remote machine using a standard 
+
+tensorboard --logdir runs --port=6006
+
+# On your local machine, go to http://localhost:6006/ (http://127.0.0.1:16006) and enjoy your remote TensorBoard.
