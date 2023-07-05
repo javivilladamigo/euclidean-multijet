@@ -1,6 +1,6 @@
 # Install environment
 ```
-conda create -n coffea_torch coffea pytorch
+conda create -n coffea_torch coffea pytorch tensorboard
 conda activate coffea_torch
 ```
 
@@ -33,3 +33,6 @@ We can precompute friend TTrees of the 3-fold model output to make it fast and e
 ```
 python python/train.py --model "models/FvT_Basic_CNN_8_offset_*_epoch_20.pkl"
 ```
+
+# Autoencorder
+Train with ``--task dec``
