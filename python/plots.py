@@ -415,8 +415,9 @@ def plot_lossVAE(loss, offset, epoch, sample, network_name):
 def plot_loss(loss, offset, epoch, sample, network_name):
     fig, ax = plt.subplots(figsize = (15, 5))
     ax.set_yscale("log")
-    ax.plot(loss["train"], color = "r", label = "Train loss")
-    ax.plot(loss["val"], color = "b", label = "Val loss")
+    x = np.arange(1,epoch+1)
+    ax.plot(x,loss["train"], color = "r", label = "Train loss")
+    ax.plot(x,loss["val"], color = "b", label = "Val loss")
 
     ax.legend(loc = "best")
     ax.set_xlabel('Epoch')
@@ -526,13 +527,14 @@ def plot_PxPyPzEPtm2jm4j(true_val, reco_val, phi_rot, offset, epoch, sample, net
     h, bins1, _ = ax[1,2].hist(true_m4j.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
     nbins = int(round(max(rec_m4j.flatten().numpy()) - min(rec_m4j.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
     ax[1,2].hist(rec_m4j.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
-    ax[1, 2].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+    ax[1,2].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
     
-    ax[0, 0].set_xlim(-250, 250); ax[0,1].set_xlim(-250, 250)
-    ax[0, 2].set_yscale("log"); ax[0,3].set_yscale("log"); ax[1,0].set_yscale("log"); ax[1,1].set_yscale("log"); ax[1,2].set_yscale("log")
-    ax[1, 0].set_xlabel('$p_{T}\ ({\\rm GeV})$')
-    ax[1, 1].set_xlabel('$m_{2j}\ ({\\rm GeV})$')
-    ax[1, 2].set_xlabel('Reco $m_{4j}\ ({\\rm GeV})$')
+    ax[0,0].set_xlim(-500, 500); ax[0,1].set_xlim(-500, 500)
+    ax[0,0].set_yscale('log'); ax[0,1].set_yscale('log')
+    ax[0,2].set_yscale("log"); ax[0,3].set_yscale("log"); ax[1,0].set_yscale("log"); ax[1,1].set_yscale("log"); ax[1,2].set_yscale("log")
+    ax[1,0].set_xlabel('$p_{T}\ ({\\rm GeV})$')
+    ax[1,1].set_xlabel('$m_{2j}\ ({\\rm GeV})$')
+    ax[1,2].set_xlabel('Reco $m_{4j}\ ({\\rm GeV})$')
 
     #ax[3].set_xlim(-100, 1000)
     ax[0,0].legend(loc = "best")

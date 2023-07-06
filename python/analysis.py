@@ -85,7 +85,7 @@ class analysis(processor.ProcessorABC):
                                                              storage='weight', label='Events')
 
         if fvt_exists:
-            fvt_axis = hist.axis.Regular(50, 0, 5, name='rw', label='FvT P(D4)/P(D3)')
+            fvt_axis = hist.axis.Regular(50, 0, 2.5, name='rw', label='FvT P(D4)/P(D3)')
             output['hists']['FvT_rw'] = hist.Hist(dataset_axis,
                                                   cut_axis,
                                                   region_axis,

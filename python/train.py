@@ -93,8 +93,8 @@ Architecture hyperparameters
 '''
 permutations = list(itertools.permutations([0,1,2,3]))
 
-loss_pt = True # whether to add pt to the loss of PxPyPzE
-rotate_phi = True # whether to remove eta-phi invariances in the encoding
+loss_pt = False # whether to add pt to the loss of PxPyPzE
+rotate_phi = False # whether to remove eta-phi invariances in the encoding
 
 testing = True
 if testing:
@@ -109,7 +109,7 @@ lr_scale = 0.25
 bs_scale = 2
 
 bs_milestones =     [1, 3, 6, 10]
-lr_milestones =     [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 100, 200, 250, 300, 400, 450]
+lr_milestones =     [6, 10, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 100, 200, 250, 300, 400, 450]
 #gb_milestones =     [5, 7, 10, 15, 20, 30, 40, 50, 100, 150, 200]
 
 train_batch_size = 2**10
@@ -148,7 +148,7 @@ class Loader_Result:
     def __init__(self, model, dataset, n_classes=2, train=False):
         self.dataset = dataset
         self.infer_loader = DataLoader(dataset=dataset, batch_size=infer_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-        self.train_loader = DataLoader(dataset=dataset, batch_size=train_batch_size, shuffle=False,  num_workers=num_workers, pin_memory=True, drop_last=True) if train else None
+        self.train_loader = DataLoader(dataset=dataset, batch_size=train_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=True) if train else None
         self.n = len(dataset)
         self.w = dataset.tensors[1] if model.task == 'dec' else dataset.tensors[2]
         self.w_sum = self.w.sum()
@@ -159,6 +159,7 @@ class Loader_Result:
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
         self.j_ = torch.zeros(self.n, 4, 4)
         self.rec_j_ = torch.zeros(self.n, 4, 4)
+        self.component_weights = torch.tensor([1,1,0.3,0.3]).view(1,4,1,1)
         self.n_done = 0
         self.loaded_die_loss = model.loaded_die_loss if hasattr(model, 'loaded_die_loss') else None
         self.loss_estimate = 1.0
@@ -184,7 +185,13 @@ class Loader_Result:
             else:
                 mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none').sum(dim= (1,2))
         else:
-            j = j.unsqueeze(3).repeat(1, 1, 1, 24) # repeat j (copy) along the 24-sized permutations dimension 
+            j = j.unsqueeze(3).repeat(1, 1, 1, 24) # repeat j (copy) along the 24-sized permutations dimension
+            # produce all possible jet permutations of reconstructed jets
+            rec_j_perm = torch.zeros(*rec_j.shape, 24)
+            for k, perm in enumerate(list(itertools.permutations([0,1,2,3]))):
+                    rec_j_perm[:, :, :, k] = rec_j[:, :, perm]
+            rec_j = rec_j_perm
+            
             if phi_rotations:
                 if loss_pt:
                     general_loss = F.mse_loss(j, rec_j, reduction = 'none')
@@ -196,25 +203,36 @@ class Loader_Result:
                 mse_loss_batch, perm_index = mse_loss_batch_perms.min(dim = 1) # dimension 0 is batch and dimension 1 is permutation
 
             else:
-                mse_loss_batch_perms = F.mse_loss(j, rec_j, reduction = 'none').sum(dim = (1,2)) # sum along jets and features errors
+                mse_loss_batch_perms = F.mse_loss(j*self.component_weights, rec_j*self.component_weights, reduction = 'none').sum(dim = (1,2)) # sum along jets and features errors
                 mse_loss_batch, perm_index = mse_loss_batch_perms.min(dim = 1) # dimension 0 is batch and dimension 1 is permutation
+                rec_j = rec_j[torch.arange(rec_j.shape[0]), :, :, perm_index]
+
+                # j.shape = [batch_size, 4, 4, 24]
+                # print(perm_index[0])
+                # print('true')
+                # print(    j[0,:,:,0])
+                # print('rec')
+                # print(rec_j[0,:,:,perm_index[0]])                
                 # perm_index is a number 0-23 indicating the best permutation: 0123, 0132, 0213, ..., 3210
 
-            
-        
-        if reduction == 'mean':
-            mse_loss_batch = mse_loss_batch.mean() #+ mse_loss_batch_d + mse_loss_batch_q
-        elif reduction == 'sum':
-            mse_loss_batch = mse_loss_batch.sum()
-        else:
-            sys.exit("Reduction mode not valid. Exiting...")
 
-        return mse_loss_batch, perm_index
+        # I would just take the sqrt here
+        loss_batch = mse_loss_batch.sqrt()
+
+        # You should only ever be taking the weighted mean over the batch, certainly not summing over events in the batch
+        # if reduction == 'mean':
+        #     loss_batch = loss_batch.mean() #+ mse_loss_batch_d + mse_loss_batch_q
+        # elif reduction == 'sum':
+        #     loss_batch = loss_batch.sum()
+        # else:
+        #     sys.exit("Reduction mode not valid. Exiting...")
+
+        return loss_batch, rec_j#, perm_index
 
     def infer_batch_AE(self, j, rec_j, phi_rotations, epoch, plot_every): # expecting same sized j and rec_j
         n_batch = rec_j.shape[0]
-        loss_batch, perm_index = self.loss_fn(j, rec_j, phi_rotations = phi_rotations)
-        perm_rec_j = rec_j[torch.arange(n_batch), :, :, perm_index]
+        loss_batch, perm_rec_j = self.loss_fn(j, rec_j, phi_rotations = phi_rotations)
+        # perm_rec_j = rec_j[torch.arange(n_batch), :, :, perm_index]
 
 
         #total_m2j_ = torch.Tensor(())
@@ -252,14 +270,17 @@ class Loader_Result:
         #print("\nMean infer loss:", self.decoding_loss.mean(dim=0).data)
         self.loss = (self.w * self.decoding_loss).sum() / self.w_sum # multiply weight for all the jet features and recover the original shape of the features 
         self.history['loss'].append(copy(self.loss))
-        train_loss_tosave.append(self.loss.item() ** 0.5) if self.train else val_loss_tosave.append(self.loss.item() ** 0.5)
+        # just take the sqrt in the loss_fn
+        # train_loss_tosave.append(self.loss.item() ** 0.5) if self.train else val_loss_tosave.append(self.loss.item() ** 0.5)
+        train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
         self.n_done = 0
 
     def train_batch_AE(self, j, rec_j, w, phi_rotations): # expecting same sized j and rec_j
 
-        loss_batch, perm_index = self.loss_fn(j, rec_j, phi_rotations=phi_rotations)
+        loss_batch, perm_rec_j = self.loss_fn(j, rec_j, phi_rotations=phi_rotations)
         # not really needed perm_index in output, only extracted in inference for plotting
 
+        # I actually am not sure what you were doing here since you had been already taking the mean over the batch... Should be fixed now
         loss_batch = (w * loss_batch).sum() / w.sum() # multiply weight for all the jet features and recover the original shape of the features 
         loss_batch.backward()
         self.loss_estimate = self.loss_estimate * .02 + 0.98*loss_batch.item()
@@ -340,7 +361,7 @@ class Model_AE:
         sys.stdout.write(' '*SCREEN_WIDTH)
         sys.stdout.flush()
         print('\r',end='')
-        print(f'\n\nEpoch {self.epoch:>2} | Training | Loss {self.train_result.loss:1.5}')
+        print(f'\n\nEpoch {self.epoch:>2} | Training   | Loss {self.train_result.loss:1.5}')
 
     def valid_inference(self):
         self.inference(self.valid_result)
@@ -358,7 +379,6 @@ class Model_AE:
 
             jPxPyPzE, rec_jPxPyPzE = self.network(j)
 
-            
             result.train_batch_AE(jPxPyPzE, rec_jPxPyPzE, w, self.network.phi_rotations)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
@@ -451,9 +471,9 @@ class Model_AE:
     def run_training(self, plot_res = False):
         min_val_loss = 1e20
         val_loss_increase_counter = 0
-        #self.network.set_mean_std(self.train_result.dataset.tensors[0])
-        self.train_inference()
-        self.valid_inference()
+        self.network.set_mean_std(self.train_result.dataset.tensors[0])
+        # self.train_inference()
+        # self.valid_inference()
 
         tb = SummaryWriter()
         
@@ -603,6 +623,7 @@ if __name__ == '__main__':
         # task is autoencoding
         if task == 'dec':
             sample = 'fourTag'
+            # sample = 'threeTag'
             coffea_file = sorted(glob(f'data/{sample}_picoAOD*.coffea')) # file used for autoencoding
             
             # Load data
