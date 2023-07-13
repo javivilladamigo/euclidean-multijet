@@ -197,7 +197,7 @@ def PtEtaPhiM(v):
     
 def addFourVectors(v1, v2, v1PxPyPzE=None, v2PxPyPzE=None): # output added four-vectors
     #vX[batch index, (pt,eta,phi,m), object index]
-
+    
     if v1PxPyPzE is None:
         v1PxPyPzE = PxPyPzE(v1)
     if v2PxPyPzE is None:
@@ -206,13 +206,23 @@ def addFourVectors(v1, v2, v1PxPyPzE=None, v2PxPyPzE=None): # output added four-
     v12PxPyPzE = v1PxPyPzE + v2PxPyPzE
     v12        = PtEtaPhiM(v12PxPyPzE)
 
+
     return v12, v12PxPyPzE
 
+def calcDeltaEta(v1, v2): # expects PtEtaPhiM representation
+    dEta = (v1[:,1:2,:]-v2[:,1:2,:])
+    return dEta
+    
 def calcDeltaPhi(v1, v2): #expects eta, phi representation
     dPhi12 = (v1[:,2:3]-v2[:,2:3])%math.tau
     dPhi21 = (v2[:,2:3]-v1[:,2:3])%math.tau
     dPhi = torch.min(dPhi12,dPhi21)
     return dPhi
+
+def calcDeltaR(v1, v2): # expects PtEtaPhiM representation
+    dEta = (v1[:,1:2,:]-v2[:,1:2,:])
+    dPhi = calcDeltaPhi(v1, v2)
+    return (dEta ** 2 + dPhi ** 2).sqrt()
 
 def setLeadingEtaPositive(batched_v) -> torch.Tensor: # expects [batch, feature, jet nb]
     etaSign = 1-2*(batched_v[:,1,0:1]<0).float() # -1 if eta is negative, +1 if eta is zero or positive
@@ -586,13 +596,59 @@ class Basic_CNN_AE(nn.Module):
         # dec_j = NonLU(dec_j)
         dec_j = self.decode_j(dec_j)                                                            # 4x4
 
-        Pt =    dec_j[:,0:1].cosh()+39 # ensures pt is >=40 GeV
-        Px = Pt*dec_j[:,2:3].cos()
-        Py = Pt*dec_j[:,2:3].sin()
-        Pz = Pt*dec_j[:,1:2].sinh()
+        
+        deltaPhi = calcDeltaPhi(dec_j[:,:,(0,2,0,1,0,1)], dec_j[:,:,(1,3,2,3,3,2)])
+        deltaEta = calcDeltaEta(dec_j[:,:,(0,2,0,1,0,1)], dec_j[:,:,(1,3,2,3,3,2)])
+        inputDeltaR_squared = deltaEta**2 + deltaPhi**2
+        mask_DeltaR_below_threshold = (inputDeltaR_squared[:,:,:] < 0.16) # batch x 1 x 6
+        deltaR_squared = 0.16 + F.relu(inputDeltaR_squared - 0.16) # this will output 0.16 for inputDeltaR_squared < 0.16 and inputDeltaR_squared for inputDeltaR_squared > 0.16
+
+        # Create a new tensor that combines the original values and corrected values using the mask
+        dec_j_new = dec_j.clone()
+        # we'll keep deltaPhi fixed and correct the first eta of the pairing
+        dec_j_new[:,1:2,(0,2,0,1,0,1)] = (1 - mask_DeltaR_below_threshold.float()) * dec_j[:,1:2,(0,2,0,1,0,1)] + mask_DeltaR_below_threshold.float()*dec_j[:,1:2,(1,3,2,3,3,2)] + (0.16 - (mask_DeltaR_below_threshold.float()*deltaPhi)**2).sqrt()
+
+        debug_deltaR_correction = False
+        if debug_deltaR_correction:
+            print("\ndec_j[1]") # element 1 has a DeltaR < 0.4 at pairing index 5 (pairing 12)
+            print(dec_j[1])
+            print("\ninputDeltaR_squared[1]")
+            print(inputDeltaR_squared[1])
+            print("\nmask")
+            print(mask_DeltaR_below_threshold[1])
+
+            print("\ndeltaR_squared[1]")
+            print(deltaR_squared[1])
+
+            print("DeltaEta, DeltaPhi:")
+            print(deltaEta[1], deltaPhi[1])
+
+            print("\ndeltaR_squared - deltaPhi")
+            print((deltaR_squared - deltaPhi)[1])
+            
+            print("\ndec_j:")
+            print(dec_j[1,1:2,(0,2,0,1,0,1)])
+            print("\nOriginal eta:")
+            print(dec_j[1,1:2])
+            print("\nCorrected eta:")
+            print(dec_j_new[1,1:2])
+        else:
+            pass
+
+        
+        Pt = dec_j_new[:,0:1].cosh()+39 # ensures pt is >=40 GeV
+        Eta = dec_j_new[:,1:2]
+        Phi = dec_j_new[:,2:3]
+        M = dec_j_new[:,3:4].cosh()-1
+        
+        Px = Pt*Phi.cos()
+        Py = Pt*Phi.sin()
+        Pz = Pt*Eta.sinh()
+
         # M  =    dec_j[:,3:4].cosh()-1 # >=0, in our case it is always zero for the toy data. we could relax this for real data
         # E  = (Pt**2+Pz**2+M**2).sqrt()   # ensures E^2>=M^2
         E  = (Pt**2+Pz**2).sqrt() # ensures E^2>=0. In our case M is zero so let's not include it
+        rec_j = torch.cat((Pt, Eta, Phi, M), 1)
         rec_jPxPyPzE = torch.cat((Px, Py, Pz, E), 1)
         
         # # Nonlinearity for final output four-vector components
@@ -664,7 +720,7 @@ class Basic_CNN_AE(nn.Module):
             rec_m2j_sc[:, 0, i] = (rec_m2j[:, 0, i] - m2j_mean[i]) / m2j_std[i]
         '''            
         
-        return jPxPyPzE, rec_jPxPyPzE
+        return jPxPyPzE, rec_jPxPyPzE, j_rot, rec_j
 
 
 

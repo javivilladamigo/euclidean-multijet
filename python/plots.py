@@ -473,6 +473,10 @@ def plot_PxPyPzEPtm2jm4j(true_val, reco_val, phi_rot, offset, epoch, sample, net
     true_pt = ((true_val[:, 0:1, :]**2 + true_val[:, 1:2, :]**2).sqrt()).detach()
     rec_pt = ((reco_val[:, 0:1, :]**2 + reco_val[:, 1:2, :]**2).sqrt()).detach()
 
+    DeltaR = networks.calcDeltaR(networks.PtEtaPhiM(true_val)[:,:,(0,2,0,1,0,1)],
+                                        networks.PtEtaPhiM(true_val)[:,:,(1,3,2,3,3,2)]) # obtain the DeltaR between the 6 combinations of jets: this DeltaR should never be < 0.4
+    rec_DeltaR = networks.calcDeltaR(networks.PtEtaPhiM(reco_val)[:,:,(0,2,0,1,0,1)],
+                                        networks.PtEtaPhiM(reco_val)[:,:,(1,3,2,3,3,2)]) # obtain the DeltaR between the 6 combinations of jets: this DeltaR should never be < 0.4
 
     width = 10 # GeV
     fig, ax = plt.subplots(2, 4, figsize = (15, 5))
@@ -528,14 +532,23 @@ def plot_PxPyPzEPtm2jm4j(true_val, reco_val, phi_rot, offset, epoch, sample, net
     nbins = int(round(max(rec_m4j.flatten().numpy()) - min(rec_m4j.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
     ax[1,2].hist(rec_m4j.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = bins1)
     ax[1,2].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
+
+    width = 0.1
+    nbins = int(round(max(DeltaR.flatten().numpy()) - min(DeltaR.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+    h, bins1, _ = ax[1,3].hist(DeltaR.flatten().numpy(), color = "firebrick", label = "true", histtype = "step", bins = nbins)
+    nbins = int(round(max(rec_DeltaR.flatten().numpy()) - min(rec_DeltaR.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
+    ax[1,3].hist(rec_DeltaR.flatten().numpy(), color = "blue", label = "reco", histtype = "step", bins = nbins)
+    ax[1,3].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f}')
     
     ax[0,0].set_xlim(-500, 500); ax[0,1].set_xlim(-500, 500)
+    ax[1,1].set_xlim(0, 1500)
+    ax[1,2].set_xlim(0, 1500)
     ax[0,0].set_yscale('log'); ax[0,1].set_yscale('log')
     ax[0,2].set_yscale("log"); ax[0,3].set_yscale("log"); ax[1,0].set_yscale("log"); ax[1,1].set_yscale("log"); ax[1,2].set_yscale("log")
     ax[1,0].set_xlabel('$p_{T}\ ({\\rm GeV})$')
     ax[1,1].set_xlabel('$m_{2j}\ ({\\rm GeV})$')
     ax[1,2].set_xlabel('Reco $m_{4j}\ ({\\rm GeV})$')
-
+    ax[1,3].set_xlabel('$\Delta R$')
     #ax[3].set_xlim(-100, 1000)
     ax[0,0].legend(loc = "best")
     fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
@@ -671,24 +684,24 @@ def plot_loss_distr(j, loss_distr, loss_weights, offset, epoch, sample, network_
     print(f'Loss distribution saved to {path}')
     plt.close()
 
-def plot_etaPhi_plane(true_val, reco_val, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
+def plot_etaPhi_plane(jPxPyPzE, rec_jPxPyPzE, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
     import matplotlib
     #matplotlib.use('qtagg')
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     #from fast_histogram import histogram2d
 
-    true_j = networks.PtEtaPhiM(true_val)
-    rec_j = networks.PtEtaPhiM(reco_val)
-    pos = int(round(np.random.uniform()*true_j.shape[0]))
+    true_j = networks.PtEtaPhiM(jPxPyPzE)
+    rec_j = networks.PtEtaPhiM(rec_jPxPyPzE)
+    event_number = int(round(np.random.uniform()*true_j.shape[0]))
 
-    pt_true = true_j[pos, 0, :].detach().flatten().numpy()
-    pt_rec = rec_j[pos, 0, :].detach().flatten().numpy()
+    pt_true = true_j[event_number, 0, :].detach().flatten().numpy()
+    pt_rec = rec_j[event_number, 0, :].detach().flatten().numpy()
 
-    eta_true = true_j[pos, 1, :].detach().flatten().numpy()
-    eta_rec = rec_j[pos, 1, :].detach().flatten().numpy()
-    phi_true = true_j[pos, 2, :].detach().flatten().numpy()
-    phi_rec = rec_j[pos, 2, :].detach().flatten().numpy()
+    eta_true = true_j[event_number, 1, :].detach().flatten().numpy()
+    eta_rec = rec_j[event_number, 1, :].detach().flatten().numpy()
+    phi_true = true_j[event_number, 2, :].detach().flatten().numpy()
+    phi_rec = rec_j[event_number, 2, :].detach().flatten().numpy()
     
     coords = [eta_true, phi_true, eta_rec, phi_rec]         
     #cmap = cm.get_cmap("bwr")
@@ -698,8 +711,8 @@ def plot_etaPhi_plane(true_val, reco_val, offset, epoch, sample, network_name): 
     fig, ax = plt.subplots(1, figsize = (10, 10))
     for j in range(4):
         ax.plot((eta_true[j], eta_rec[j]), (phi_true[j], phi_rec[j]), lw = 2, ls = 'dashed', color = 'grey')
-    ax.scatter(eta_true, phi_true, s=pt_true, color = 'red', label = f'True {pos} event')
-    ax.scatter(eta_rec, phi_rec, s=pt_rec, color = 'blue', label = f'Reco {pos} event')
+    ax.scatter(eta_true, phi_true, s=pt_true, color = 'red', label = f'True {event_number} event')
+    ax.scatter(eta_rec, phi_rec, s=pt_rec, color = 'blue', label = f'Reco {event_number} event')
     ax.set_xlim(-3, 3)
     ax.set_ylim(-np.pi, np.pi)
     ax.tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
@@ -708,13 +721,62 @@ def plot_etaPhi_plane(true_val, reco_val, offset, epoch, sample, network_name): 
     ax.set_xlabel('$\eta$')
     ax.set_ylabel('$\phi$')
 
-    fig.tight_layout()
+    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
     ax.legend(loc='best')
     path = f"plots/redec/{sample}/"
     mkpath(path)
     fig.savefig(f'{path}{sample}_etaPhiplane_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
     print(f'EtaPhiplane saved to {path}')
+    plt.close()
+    return event_number
+
+def plot_PxPy_plane(true_jPxPyPzE, rec_jPxPyPzE, event_number, offset, epoch, sample, network_name): # expects PxPy
+    import matplotlib
+    #matplotlib.use('qtagg')
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    #from fast_histogram import histogram2d
+
+    
+
+
+    px_true = true_jPxPyPzE[event_number, 0, :].detach().flatten().numpy()
+    px_rec = rec_jPxPyPzE[event_number, 0, :].detach().flatten().numpy()
+
+    py_true = true_jPxPyPzE[event_number, 1, :].detach().flatten().numpy()
+    py_rec = rec_jPxPyPzE[event_number, 1, :].detach().flatten().numpy()
+    
+    pz_true = true_jPxPyPzE[event_number, 2, :].detach().flatten().numpy()
+    pz_rec = rec_jPxPyPzE[event_number, 2, :].detach().flatten().numpy()
+
+    E_true = true_jPxPyPzE[event_number, 3, :].detach().flatten().numpy()
+    E_rec = rec_jPxPyPzE[event_number, 3, :].detach().flatten().numpy()
+    
+    coords = [px_true, py_true, px_rec, py_rec]         
+    #cmap = cm.get_cmap("bwr")
+    cmap = cm.get_cmap("viridis")
+    #cc.cm["CET_L17"].copy()
+    
+    fig, ax = plt.subplots(1, figsize = (10, 10))
+    for j in range(4):
+        ax.plot((px_true[j], px_rec[j]), (py_true[j], py_rec[j]), lw = 2, ls = 'dashed', color = 'grey')
+    ax.scatter(px_true, py_true, s=E_true, color = 'red', label = f'True {event_number} event')
+    ax.scatter(px_rec, py_rec, s=E_rec, color = 'blue', label = f'Reco {event_number} event')
+
+    ax.tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 10)
+    ax.minorticks_on()
+    ax.tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
+    ax.set_xlabel('$p_{x}\ ({\\rm GeV})$')
+    ax.set_ylabel('$p_{y}\ ({\\rm GeV})$')
+
+    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
+    fig.suptitle(f'Epoch {epoch}')
+    ax.legend(loc='best')
+    path = f"plots/redec/{sample}/"
+    mkpath(path)
+    fig.savefig(f'{path}{sample}_PxPyplane_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
+    print(f'PxPyplane saved to {path}')
     plt.close()
 
 

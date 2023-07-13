@@ -159,7 +159,7 @@ class Loader_Result:
                                                         # effective_nb_of_jets is the multiplicity of values reconstructed for each feature: 3 if only 3 relative features are being reco'd, leaving one degree of freedom, 4 if all relative pairings (i.e. 12, 23, 34, 14) are # # # to be reconstructed. Keep 3 for reconstructing only 12, 23, 34 pairings.
         self.j_ = torch.zeros(self.n, 4, 4)
         self.rec_j_ = torch.zeros(self.n, 4, 4)
-        self.component_weights = torch.tensor([1,1,0.3,0.3]).view(1,4,1,1)
+        self.component_weights = torch.tensor([1,1,0.3,0.3]).view(1,4,1)
         self.n_done = 0
         self.loaded_die_loss = model.loaded_die_loss if hasattr(model, 'loaded_die_loss') else None
         self.loss_estimate = 1.0
@@ -170,28 +170,38 @@ class Loader_Result:
     def eval(self):
         self.n_done = 0
 
-    def loss_fn(self, j, rec_j, phi_rotations, reduction = 'mean', ignore_perm = False):
-        if ignore_perm:
-            if phi_rotations:
-                mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none').sum(dim= (1,2)) # use also the loss on leading Py
-                '''
-                mse_loss_batch_Px = F.mse_loss(j[:, 0:1, :], rec_j[:, 0:1, :], reduction = 'none')       # compute the MSE loss between reconstructed jets and input jets
-                mse_loss_batch_Py = F.mse_loss(j[:, 1:2, 0:4], rec_j[:, 1:2, 1:4], reduction = 'none')   # don't use Py of leading jet because it is always 0 when phi_lead = 0
-                mse_loss_batch_Pz = F.mse_loss(j[:, 2:3, :], rec_j[:, 2:3, :], reduction = 'none')
-                mse_loss_batch_E = F.mse_loss(j[:, 3:4, :],  rec_j[:, 3:4, :],  reduction = 'none')
-                mse_loss_batch = torch.cat((mse_loss_batch_Px, mse_loss_batch_Py, mse_loss_batch_Pz, mse_loss_batch_E), 1).sum(dim = (1,2))
-                '''
-                
-            else:
-                mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none').sum(dim= (1,2))
-        else:
+    def loss_fn(self, jPxPyPzE, rec_jPxPyPzE, j, rec_j, phi_rotations, reduction = 'mean', ignore_perm = True):
+
+        if not ignore_perm:
+            
+            jPxPyPzE = jPxPyPzE.unsqueeze(3).repeat(1, 1, 1, 24) # repeat j (copy) along the 24-sized permutations dimension
             j = j.unsqueeze(3).repeat(1, 1, 1, 24) # repeat j (copy) along the 24-sized permutations dimension
             # produce all possible jet permutations of reconstructed jets
             rec_j_perm = torch.zeros(*rec_j.shape, 24)
+            rec_jPxPyPzE_perm = torch.zeros(*rec_jPxPyPzE.shape, 24)
             for k, perm in enumerate(list(itertools.permutations([0,1,2,3]))):
                     rec_j_perm[:, :, :, k] = rec_j[:, :, perm]
+                    rec_jPxPyPzE_perm[:, :, :, k] = rec_jPxPyPzE[:, :, perm]
             rec_j = rec_j_perm
+            rec_jPxPyPzE = rec_jPxPyPzE_perm
+        
+
+            # loss on DeltaR
             
+            #DeltaR = networks.calcDeltaR(j[:,:,(0,2,0,1,0,1),0], j[:,:,(1,3,2,3,3,2),0]) # obtain the DeltaR between the 6 combinations of jets: this DeltaR should never be < 0.4
+            #rec_DeltaR = networks.calcDeltaR(rec_j[:,:,(0,2,0,1,0,1),0], rec_j[:,:,(1,3,2,3,3,2),0]) # obtain the DeltaR between the 6 combinations of jets: this DeltaR should never be < 0.4
+            #mult_factor = 1
+            #slope = 100
+            #DeltaR_penalty = torch.exp(slope*(0.4 - DeltaR)).sum(dim=(1,2)) # per event
+            #DeltaR_penalty = DeltaR_penalty.unsqueeze(1).repeat(1, 24)
+            
+            #DeltaR_loss = F.l1_loss(DeltaR, rec_DeltaR, reduction = 'none').sum(dim = (1,2)) 
+            #DeltaR_loss = DeltaR_loss.unsqueeze(1).repeat(1, 24)
+
+        
+        
+
+
             if phi_rotations:
                 if loss_pt:
                     general_loss = F.mse_loss(j, rec_j, reduction = 'none')
@@ -203,9 +213,17 @@ class Loader_Result:
                 mse_loss_batch, perm_index = mse_loss_batch_perms.min(dim = 1) # dimension 0 is batch and dimension 1 is permutation
 
             else:
-                mse_loss_batch_perms = F.mse_loss(j*self.component_weights, rec_j*self.component_weights, reduction = 'none').sum(dim = (1,2)) # sum along jets and features errors
+                # sum along jets and features errors
+                self.component_weights = self.component_weights.unsqueeze(2)
+                mse_loss_batch_perms = F.mse_loss(jPxPyPzE*self.component_weights, rec_jPxPyPzE*self.component_weights, reduction = 'none').sum(dim = (1,2)) #+ 500 * DeltaR_loss #+ 300 * DeltaR_penalty
                 mse_loss_batch, perm_index = mse_loss_batch_perms.min(dim = 1) # dimension 0 is batch and dimension 1 is permutation
-                rec_j = rec_j[torch.arange(rec_j.shape[0]), :, :, perm_index]
+                rec_jPxPyPzE = rec_jPxPyPzE[torch.arange(rec_jPxPyPzE.shape[0]), :, :, perm_index]
+
+                # loss on m2j
+                d, dPxPyPzE = networks.addFourVectors(0, 0, jPxPyPzE[:,:,(0,2,0,1,0,1),0], jPxPyPzE[:,:,(1,3,2,3,3,2),0])
+
+                rec_d, rec_dPxPyPzE = networks.addFourVectors(0, 0, rec_jPxPyPzE[:,:,(0,2,0,1,0,1)], rec_jPxPyPzE[:,:,(1,3,2,3,3,2)])
+                #mass_loss = F.mse_loss(d[:, 3:4,:], rec_d[:, 3:4,:], reduction = 'none').sum(dim=(1,2))
 
                 # j.shape = [batch_size, 4, 4, 24]
                 # print(perm_index[0])
@@ -214,10 +232,32 @@ class Loader_Result:
                 # print('rec')
                 # print(rec_j[0,:,:,perm_index[0]])                
                 # perm_index is a number 0-23 indicating the best permutation: 0123, 0132, 0213, ..., 3210
+        
+        else: # no permutations
+            if phi_rotations:
+                if loss_pt:
+                    general_loss = F.mse_loss(j, rec_j, reduction = 'none')
+                    general_loss[:,1:2,0,:] = 0
+                    mse_loss_batch_perms = general_loss.sum(dim=(1,2)) + F.mse_loss((j[:,0:1,:,:]**2+j[:,1:2,:,:]**2).sqrt(), (rec_j[:,0:1,:,:]**2+rec_j[:,1:2,:,:]**2).sqrt(), reduction = 'none').sum(dim = (1,2)) # sum along jets and features errors
+                else:
+                    mse_loss_batch_perms = F.mse_loss(j, rec_j, reduction = 'none').sum(dim = (1,2)) # sum along jets and features errors
+                
+                mse_loss_batch, perm_index = mse_loss_batch_perms.min(dim = 1) # dimension 0 is batch and dimension 1 is permutation
+
+            else:
+                # sum along jets and features errors
+                mse_loss_batch_perms = F.mse_loss(jPxPyPzE*self.component_weights, rec_jPxPyPzE*self.component_weights, reduction = 'none').sum(dim = (1,2)) #+ 500 * DeltaR_loss #+ 300 * DeltaR_penalty
+                mse_loss_batch = mse_loss_batch_perms
+
+                # loss on m2j
+                d, dPxPyPzE = networks.addFourVectors(0, 0, jPxPyPzE[:,:,(0,2,0,1,0,1)], jPxPyPzE[:,:,(1,3,2,3,3,2)])
+
+                rec_d, rec_dPxPyPzE = networks.addFourVectors(0, 0, rec_jPxPyPzE[:,:,(0,2,0,1,0,1)], rec_jPxPyPzE[:,:,(1,3,2,3,3,2)])
+                #mass_loss = F.mse_loss(d[:, 3:4,:], rec_d[:, 3:4,:], reduction = 'none').sum(dim=(1,2))
 
 
         # I would just take the sqrt here
-        loss_batch = mse_loss_batch.sqrt()
+        loss_batch = (mse_loss_batch).sqrt()
 
         # You should only ever be taking the weighted mean over the batch, certainly not summing over events in the batch
         # if reduction == 'mean':
@@ -227,11 +267,11 @@ class Loader_Result:
         # else:
         #     sys.exit("Reduction mode not valid. Exiting...")
 
-        return loss_batch, rec_j#, perm_index
+        return loss_batch, rec_jPxPyPzE #, perm_index
 
-    def infer_batch_AE(self, j, rec_j, phi_rotations, epoch, plot_every): # expecting same sized j and rec_j
-        n_batch = rec_j.shape[0]
-        loss_batch, perm_rec_j = self.loss_fn(j, rec_j, phi_rotations = phi_rotations)
+    def infer_batch_AE(self, jPxPyPzE, rec_jPxPyPzE, j, rec_j, phi_rotations, epoch, plot_every): # expecting same sized j and rec_j
+        n_batch = rec_jPxPyPzE.shape[0]
+        loss_batch, perm_rec_jPxPyPzE = self.loss_fn(jPxPyPzE, rec_jPxPyPzE, j, rec_j, phi_rotations = phi_rotations)
         # perm_rec_j = rec_j[torch.arange(n_batch), :, :, perm_index]
 
 
@@ -246,8 +286,8 @@ class Loader_Result:
 
 
         if epoch % plot_every == 0 and self.train:
-            self.j_[self.n_done : self.n_done + n_batch] = j
-            self.rec_j_[self.n_done : self.n_done + n_batch] = perm_rec_j
+            self.j_[self.n_done : self.n_done + n_batch] = jPxPyPzE
+            self.rec_j_[self.n_done : self.n_done + n_batch] = perm_rec_jPxPyPzE
             #total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
             #total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
             #total_m4j_ = torch.cat((total_m4j_, m4j_), 0)
@@ -275,9 +315,9 @@ class Loader_Result:
         train_loss_tosave.append(self.loss.item()) if self.train else val_loss_tosave.append(self.loss.item())
         self.n_done = 0
 
-    def train_batch_AE(self, j, rec_j, w, phi_rotations): # expecting same sized j and rec_j
+    def train_batch_AE(self, jPxPyPzE, rec_jPxPyPzE, j, rec_j, w, phi_rotations): # expecting same sized j and rec_j
 
-        loss_batch, perm_rec_j = self.loss_fn(j, rec_j, phi_rotations=phi_rotations)
+        loss_batch, perm_rec_j = self.loss_fn(jPxPyPzE, rec_jPxPyPzE, j, rec_j, phi_rotations=phi_rotations)
         # not really needed perm_index in output, only extracted in inference for plotting
 
         # I actually am not sure what you were doing here since you had been already taking the mean over the batch... Should be fixed now
@@ -344,10 +384,10 @@ class Model_AE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            jPxPyPzE, rec_jPxPyPzE = self.network(j)
+            jPxPyPzE, rec_jPxPyPzE, j, rec_j = self.network(j)
 
             
-            result.infer_batch_AE(jPxPyPzE, rec_jPxPyPzE, self.network.phi_rotations, epoch = self.epoch, plot_every = plot_every)
+            result.infer_batch_AE(jPxPyPzE, rec_jPxPyPzE, j, rec_j, self.network.phi_rotations, epoch = self.epoch, plot_every = plot_every)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -377,9 +417,9 @@ class Model_AE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            jPxPyPzE, rec_jPxPyPzE = self.network(j)
+            jPxPyPzE, rec_jPxPyPzE, j, rec_j = self.network(j)
 
-            result.train_batch_AE(jPxPyPzE, rec_jPxPyPzE, w, self.network.phi_rotations)
+            result.train_batch_AE(jPxPyPzE, rec_jPxPyPzE, j, rec_j, w, self.network.phi_rotations)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
             sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
@@ -406,7 +446,8 @@ class Model_AE:
         if plot_res and self.epoch % plot_every == 0 and self.train_result.train:
             plots.plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
             plots.plot_PxPyPzEPtm2jm4j(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
-            plots.plot_etaPhi_plane(self.train_result.j_, self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            randomly_plotted_event_number = plots.plot_etaPhi_plane(self.train_result.j_, self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_PxPy_plane(true_jPxPyPzE = self.train_result.j_, rec_jPxPyPzE = self.train_result.rec_j_, event_number = randomly_plotted_event_number, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
         '''
         if plot_res and self.epoch % plot_every == 0:
             total_jPxPyPzE_ = torch.Tensor(())
