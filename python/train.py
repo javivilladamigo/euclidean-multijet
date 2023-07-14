@@ -95,6 +95,7 @@ permutations = list(itertools.permutations([0,1,2,3]))
 
 loss_pt = False # whether to add pt to the loss of PxPyPzE
 rotate_phi = False # whether to remove eta-phi invariances in the encoding
+ignore_perm = True
 
 testing = True
 if testing:
@@ -160,6 +161,8 @@ class Loader_Result:
         self.j_ = torch.zeros(self.n, 4, 4)
         self.rec_j_ = torch.zeros(self.n, 4, 4)
         self.component_weights = torch.tensor([1,1,0.3,0.3]).view(1,4,1,1)
+        if ignore_perm:
+            self.component_weights = self.component_weights.view(1,4,1)
         self.n_done = 0
         self.loaded_die_loss = model.loaded_die_loss if hasattr(model, 'loaded_die_loss') else None
         self.loss_estimate = 1.0
@@ -170,7 +173,7 @@ class Loader_Result:
     def eval(self):
         self.n_done = 0
 
-    def loss_fn(self, j, rec_j, phi_rotations, reduction = 'mean', ignore_perm = False):
+    def loss_fn(self, j, rec_j, phi_rotations, reduction = 'mean'):
         if ignore_perm:
             if phi_rotations:
                 mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none').sum(dim= (1,2)) # use also the loss on leading Py
@@ -183,7 +186,7 @@ class Loader_Result:
                 '''
                 
             else:
-                mse_loss_batch = F.mse_loss(j, rec_j, reduction = 'none').sum(dim= (1,2))
+                mse_loss_batch = F.mse_loss(j*self.component_weights, rec_j*self.component_weights, reduction = 'none').sum(dim= (1,2))
         else:
             j = j.unsqueeze(3).repeat(1, 1, 1, 24) # repeat j (copy) along the 24-sized permutations dimension
             # produce all possible jet permutations of reconstructed jets
@@ -295,7 +298,7 @@ class Model_AE:
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(dimension = 16, phi_rotations = rotate_phi, device = self.device)
+        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = 8, phi_rotations = rotate_phi, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')

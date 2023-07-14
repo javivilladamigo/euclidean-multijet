@@ -391,10 +391,11 @@ class Basic_CNN(nn.Module):
 
 
 class Basic_CNN_AE(nn.Module):
-    def __init__(self, dimension, phi_rotations, out_features = 12, device = 'cpu'):
+    def __init__(self, dimension, bottleneck_dim = None, phi_rotations = False, out_features = 12, device = 'cpu'):
         super(Basic_CNN_AE, self).__init__()
         self.device = device
         self.d = dimension
+        self.d_bottleneck = bottleneck_dim if bottleneck_dim is not None else self.d
         self.out_features = out_features
         self.phi_rotations = phi_rotations
         self.n_ghost_batches = 64
@@ -405,6 +406,9 @@ class Basic_CNN_AE(nn.Module):
         self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device=self.device)
         self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device=self.device)
         self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device=self.device)
+
+        self.bottleneck_in          = Ghost_Batch_Norm(self.d, features_out=self.d_bottleneck, conv=True, device=self.device)
+        self.bottleneck_out         = Ghost_Batch_Norm(self.d_bottleneck, features_out=self.d, conv=True, device=self.device)
 
         self.decode_q               = Ghost_Batch_Norm(self.d, features_out=self.d, stride=3, conv_transpose=True, device=self.device)
         self.dijets_from_quadjets   = Ghost_Batch_Norm(self.d, features_out=self.d, stride=2, conv_transpose=True, device=self.device)
@@ -497,6 +501,9 @@ class Basic_CNN_AE(nn.Module):
         self.jets_to_dijets.set_ghost_batches(n_ghost_batches)
         self.dijets_to_quadjets.set_ghost_batches(n_ghost_batches)
         self.select_q.set_ghost_batches(n_ghost_batches)
+        # bottleneck
+        self.bottleneck_in.set_ghost_batches(n_ghost_batches)
+        self.bottleneck_out.set_ghost_batches(n_ghost_batches)
         # decoder
         self.decode_q.set_ghost_batches(n_ghost_batches)
         self.dijets_from_quadjets.set_ghost_batches(n_ghost_batches)
@@ -554,6 +561,12 @@ class Basic_CNN_AE(nn.Module):
         #add together the quadjets with their corresponding probability weight
         e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1] (8x3 · 3x1 = 8x1)
 
+        #
+        # Bottleneck
+        #
+        e = NonLU(self.bottleneck_in(e))
+        e = NonLU(self.bottleneck_out(e))
+        
         #
         # Decode Block
         #
