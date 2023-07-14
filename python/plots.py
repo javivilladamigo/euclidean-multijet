@@ -547,7 +547,7 @@ def plot_PxPyPzEPtm2jm4j(true_val, reco_val, phi_rot, offset, epoch, sample, net
     ax[0,2].set_yscale("log"); ax[0,3].set_yscale("log"); ax[1,0].set_yscale("log"); ax[1,1].set_yscale("log"); ax[1,2].set_yscale("log")
     ax[1,0].set_xlabel('$p_{T}\ ({\\rm GeV})$')
     ax[1,1].set_xlabel('$m_{2j}\ ({\\rm GeV})$')
-    ax[1,2].set_xlabel('Reco $m_{4j}\ ({\\rm GeV})$')
+    ax[1,2].set_xlabel('$m_{4j}\ ({\\rm GeV})$')
     ax[1,3].set_xlabel('$\Delta R$')
     #ax[3].set_xlim(-100, 1000)
     ax[0,0].legend(loc = "best")

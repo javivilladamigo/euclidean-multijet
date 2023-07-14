@@ -210,7 +210,7 @@ def addFourVectors(v1, v2, v1PxPyPzE=None, v2PxPyPzE=None): # output added four-
     return v12, v12PxPyPzE
 
 def calcDeltaEta(v1, v2): # expects PtEtaPhiM representation
-    dEta = (v1[:,1:2,:]-v2[:,1:2,:])
+    dEta = (v2[:,1:2,:]-v1[:,1:2,:])
     return dEta
     
 def calcDeltaPhi(v1, v2): #expects eta, phi representation
@@ -218,6 +218,7 @@ def calcDeltaPhi(v1, v2): #expects eta, phi representation
     dPhi21 = (v2[:,2:3]-v1[:,2:3])%math.tau
     dPhi = torch.min(dPhi12,dPhi21)
     return dPhi
+
 
 def calcDeltaR(v1, v2): # expects PtEtaPhiM representation
     dEta = (v1[:,1:2,:]-v2[:,1:2,:])
@@ -595,8 +596,10 @@ class Basic_CNN_AE(nn.Module):
         # dec_j = self.expand_j(dec_j)
         # dec_j = NonLU(dec_j)
         dec_j = self.decode_j(dec_j)                                                            # 4x4
-
         
+
+
+        '''
         deltaPhi = calcDeltaPhi(dec_j[:,:,(0,2,0,1,0,1)], dec_j[:,:,(1,3,2,3,3,2)])
         deltaEta = calcDeltaEta(dec_j[:,:,(0,2,0,1,0,1)], dec_j[:,:,(1,3,2,3,3,2)])
         inputDeltaR_squared = deltaEta**2 + deltaPhi**2
@@ -607,7 +610,61 @@ class Basic_CNN_AE(nn.Module):
         dec_j_new = dec_j.clone()
         # we'll keep deltaPhi fixed and correct the first eta of the pairing
         dec_j_new[:,1:2,(0,2,0,1,0,1)] = (1 - mask_DeltaR_below_threshold.float()) * dec_j[:,1:2,(0,2,0,1,0,1)] + mask_DeltaR_below_threshold.float()*dec_j[:,1:2,(1,3,2,3,3,2)] + (0.16 - (mask_DeltaR_below_threshold.float()*deltaPhi)**2).sqrt()
+        dec_j = dec_j_new.clone()
+        '''
 
+        correct_DeltaR = True
+        if correct_DeltaR:
+            ### ALTERNATIVE METHOD ###
+            deltaPhi = calcDeltaPhi(dec_j[:,:,(0,2,0,1,0,1)], dec_j[:,:,(1,3,2,3,3,2)])
+            deltaEta = calcDeltaEta(dec_j[:,:,(0,2,0,1,0,1)], dec_j[:,:,(1,3,2,3,3,2)])
+            inputDeltaR_squared = deltaEta**2 + deltaPhi**2 # get the DeltaR squared between jets
+            closest_pair_of_dijets_deltaR, closest_pair_of_dijets_indices = torch.topk(inputDeltaR_squared[:,0,:], k=2, largest=False)  # get the 2 minimum DeltaR and their indeces
+                                                                                                                                        # here I use [:,0,:] because second dimension is feature, which can be suppressed once youre
+                                                                                                                                        # only dealing with DeltaR
+            
+            if torch.any(closest_pair_of_dijets_deltaR < 0.16): # if any of them has a squared deltaR < 0.16
+                less_than_016 = torch.nonzero(torch.lt(closest_pair_of_dijets_deltaR, 0.16))    # gives the [event_idx, pairing_idx_idx]
+                                                                                                # event_idx gives the number of the event in which theres a pairing with DeltaR < 0.4
+                                                                                                # pairing_idx_idx gives 0 or 1, depending if the pairing with DeltaR < 0.4 is the smallest or the second smallest, respectively
+                                                                                                # imagine that in the same event (call it number 65), both 01 and 23 dijets have DeltaR < 0.4, then you will get 65 twice in event_idx
+                                                                                                # like this [..., [69, 0], [69, 1], ...]
+                                                                                                # this 0 or 1 should be indexed in closest_pair_of_dijets_indices, which will give you the true pairing index (i.e. 0-5)
+                event_idx = less_than_016[:, 0]
+                pairing_idx_idx = less_than_016[:, 1]
+
+                pairing_idx = closest_pair_of_dijets_indices[event_idx, pairing_idx_idx] # now we get the true index 0-5 of the pairing (0: 01, 1: 23, 2: 02, 3: 13, 4: 03, 5: 12)
+
+                dec_j_temp = dec_j[event_idx].clone() # clone the tensor to be modified keeping only the events that will be corrected
+                
+                
+                # get a [nb_events_to_be_modified, 1, 4] tensor, in which each of the elements of the list corresponds to jet's individual eta and phi that shall be corrected
+                first_elements_to_modify = dec_j_temp[:,:,(0,2,0,1,0,1)][torch.arange(dec_j_temp.shape[0]), :, pairing_idx].unsqueeze(1)[:,:,1:3]
+                second_elements_to_modify = dec_j_temp[:,:,(1,3,2,3,3,2)][torch.arange(dec_j_temp.shape[0]), :, pairing_idx].unsqueeze(1)[:,:,1:3]
+                
+                t = (0.4*(1+torch.abs(torch.randn(1))*0.3) / inputDeltaR_squared[event_idx, :, pairing_idx].sqrt()).unsqueeze(1) # get a [nb_events_to_be_modified, 1, 1] tensor that parametrizes the movement along the line that joins the two points (eta1, phi1) - (eta2, phi2)
+                
+                # modify eta
+                second_elements_to_modify[:,:,0:1] = first_elements_to_modify[:,:,0:1] + t * (second_elements_to_modify[:,:,0:1] - first_elements_to_modify[:,:,0:1]) # this will displace the second elements along the line that joins them so that their separation is 0.16
+                
+                #modify phi
+                phi_diff = torch.min((second_elements_to_modify[:,:,1:2] - first_elements_to_modify[:,:,1:2])%math.tau, (first_elements_to_modify[:,:,1:2] - second_elements_to_modify[:,:,1:2])%math.tau)
+                phi_slope_sign = torch.sign(second_elements_to_modify[:,:,1:2] - first_elements_to_modify[:,:,1:2]) # if modifying phi2, the slope is marked by the sign from phi2 to phi1 
+                
+                second_elements_to_modify[:,:,1:2] = first_elements_to_modify[:,:,1:2] + t * phi_slope_sign * phi_diff # this will displace the second elements along the line that joins them so that their separation is 0.16
+
+                # express all pi in the range (-pi, pi)
+                second_elements_to_modify[second_elements_to_modify[:,0,1]< -torch.pi,:,1]   += 2*torch.pi
+                second_elements_to_modify[second_elements_to_modify[:,0,1]> +torch.pi,:,1]   -= 2*torch.pi
+
+                second_pairing_idx = torch.tensor([1,3,2,3,3,2], dtype = torch.int32)
+                jet_idx = second_pairing_idx[pairing_idx]
+
+                for i, idx in enumerate(event_idx):
+                    dec_j[idx, 1:3, jet_idx[i]] = second_elements_to_modify[i].squeeze()
+
+
+        '''
         debug_deltaR_correction = False
         if debug_deltaR_correction:
             print("\ndec_j[1]") # element 1 has a DeltaR < 0.4 at pairing index 5 (pairing 12)
@@ -634,12 +691,12 @@ class Basic_CNN_AE(nn.Module):
             print(dec_j_new[1,1:2])
         else:
             pass
-
+        '''
         
-        Pt = dec_j_new[:,0:1].cosh()+39 # ensures pt is >=40 GeV
-        Eta = dec_j_new[:,1:2]
-        Phi = dec_j_new[:,2:3]
-        M = dec_j_new[:,3:4].cosh()-1
+        Pt = dec_j[:,0:1].cosh()+39 # ensures pt is >=40 GeV
+        Eta = dec_j[:,1:2]
+        Phi = dec_j[:,2:3]
+        M = dec_j[:,3:4].cosh()-1
         
         Px = Pt*Phi.cos()
         Py = Pt*Phi.sin()
