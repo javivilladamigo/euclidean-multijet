@@ -402,20 +402,24 @@ class Basic_CNN(nn.Module):
 
 
 class Basic_CNN_AE(nn.Module):
-    def __init__(self, dimension, phi_rotations, out_features = 12, device = 'cpu'):
+    def __init__(self, dimension, bottleneck_dim = None, phi_rotations = False, out_features = 12, device = 'cpu'):
         super(Basic_CNN_AE, self).__init__()
         self.device = device
         self.d = dimension
+        self.d_bottleneck = bottleneck_dim if bottleneck_dim is not None else self.d
         self.out_features = out_features
         self.phi_rotations = phi_rotations
         self.n_ghost_batches = 64
 
-        self.name = f'Basic_CNN_AE_{self.d}'
+        self.name = f'Basic_CNN_AE_{self.d_bottleneck}'
 
         self.input_embed            = Input_Embed(self.d, symmetrize=self.phi_rotations)
         self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device=self.device)
         self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device=self.device)
         self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device=self.device)
+
+        self.bottleneck_in          = Ghost_Batch_Norm(self.d, features_out=self.d_bottleneck, conv=True, device=self.device)
+        self.bottleneck_out         = Ghost_Batch_Norm(self.d_bottleneck, features_out=self.d, conv=True, device=self.device)
 
         self.decode_q               = Ghost_Batch_Norm(self.d, features_out=self.d, stride=3, conv_transpose=True, device=self.device)
         self.dijets_from_quadjets   = Ghost_Batch_Norm(self.d, features_out=self.d, stride=2, conv_transpose=True, device=self.device)
@@ -434,6 +438,7 @@ class Basic_CNN_AE(nn.Module):
         # self.decode_1 = Ghost_Batch_Norm(  self.d, features_out=2*self.d, stride=2, conv_transpose=True, device=self.device)
         # self.decode_2 = Ghost_Batch_Norm(2*self.d, features_out=4*self.d, stride=2, conv_transpose=True, device=self.device)
         # self.decode_3 = Ghost_Batch_Norm(4*self.d, features_out=3,                  conv=True,           device=self.device)
+        
         
         # self.decode_Px            = nn.Sequential(
         #     nn.Linear(in_features = 16, out_features = 32, device = self.device),
@@ -508,6 +513,9 @@ class Basic_CNN_AE(nn.Module):
         self.jets_to_dijets.set_ghost_batches(n_ghost_batches)
         self.dijets_to_quadjets.set_ghost_batches(n_ghost_batches)
         self.select_q.set_ghost_batches(n_ghost_batches)
+        # bottleneck
+        self.bottleneck_in.set_ghost_batches(n_ghost_batches)
+        self.bottleneck_out.set_ghost_batches(n_ghost_batches)
         # decoder
         self.decode_q.set_ghost_batches(n_ghost_batches)
         self.dijets_from_quadjets.set_ghost_batches(n_ghost_batches)
@@ -566,6 +574,12 @@ class Basic_CNN_AE(nn.Module):
         e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1] (8x3 · 3x1 = 8x1)
 
         #
+        # Bottleneck
+        #
+        e = NonLU(self.bottleneck_in(e))
+        e = NonLU(self.bottleneck_out(e))
+        
+        #
         # Decode Block
         #
         # dec_d = NonLU(self.decode_1(e))     # 1 pixel to 2
@@ -576,7 +590,7 @@ class Basic_CNN_AE(nn.Module):
         dec_d = NonLU(self.dijets_from_quadjets(dec_q))                                         # dec_d.shape = [batch_size, 8, 6] 01 23 02 13 03 12
         dec_j = NonLU(self.jets_from_dijets(dec_d))                                             # dec_j.shape = [batch_size, 8, 12]; dec_j is interpreted as jets 0 1 2 3 0 2 1 3 0 3 1 2
         
-        dec_j = dec_j.view(-1, self.d, 3, 4)                                                    # last index is jet 
+        dec_j = dec_j.view(-1, self.d, 3, 4)                                                    # last index is jet
         dec_j = dec_j.transpose(-1, -2)                                                         # last index is pairing history now 
         dec_j = dec_j.contiguous().view(-1, self.d * 4, 3)                                      # 32 numbers corresponding to each pairing: which means that you have 8 numbers corresponding to each jet in each pairing concatenated along the same dimension
                                                                                                 # although this is not exact because now the information between jets is mixed, but thats the idea

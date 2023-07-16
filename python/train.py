@@ -335,7 +335,7 @@ class Model_AE:
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(dimension = 16, phi_rotations = rotate_phi, device = self.device)
+        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = 8, phi_rotations = rotate_phi, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
