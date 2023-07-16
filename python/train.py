@@ -93,8 +93,13 @@ Architecture hyperparameters
 '''
 permutations = list(itertools.permutations([0,1,2,3]))
 
+## RUN NOW WITHOUT ROTATING PHI ##
+
+
 loss_pt = False # whether to add pt to the loss of PxPyPzE
+permute_input_jet = False # whether to randomly permute the positions of input jets
 rotate_phi = False # whether to remove eta-phi invariances in the encoding
+correct_DeltaR = False # whether to correct DeltaR
 
 testing = True
 if testing:
@@ -235,37 +240,15 @@ class Loader_Result:
         
         else: # no permutations
             if phi_rotations:
-                if loss_pt:
-                    general_loss = F.mse_loss(j, rec_j, reduction = 'none')
-                    general_loss[:,1:2,0,:] = 0
-                    mse_loss_batch_perms = general_loss.sum(dim=(1,2)) + F.mse_loss((j[:,0:1,:,:]**2+j[:,1:2,:,:]**2).sqrt(), (rec_j[:,0:1,:,:]**2+rec_j[:,1:2,:,:]**2).sqrt(), reduction = 'none').sum(dim = (1,2)) # sum along jets and features errors
-                else:
-                    mse_loss_batch_perms = F.mse_loss(j, rec_j, reduction = 'none').sum(dim = (1,2)) # sum along jets and features errors
-                
-                mse_loss_batch, perm_index = mse_loss_batch_perms.min(dim = 1) # dimension 0 is batch and dimension 1 is permutation
-
+                mse_loss_batch = F.mse_loss(jPxPyPzE*self.component_weights, rec_jPxPyPzE*self.component_weights, reduction = 'none').sum(dim = (1,2)) #+ 500 * DeltaR_loss #+ 300 * DeltaR_penalty
             else:
                 # sum along jets and features errors
-                mse_loss_batch_perms = F.mse_loss(jPxPyPzE*self.component_weights, rec_jPxPyPzE*self.component_weights, reduction = 'none').sum(dim = (1,2)) #+ 500 * DeltaR_loss #+ 300 * DeltaR_penalty
-                mse_loss_batch = mse_loss_batch_perms
+                mse_loss_batch = F.mse_loss(jPxPyPzE*self.component_weights, rec_jPxPyPzE*self.component_weights, reduction = 'none').sum(dim = (1,2)) #+ 500 * DeltaR_loss #+ 300 * DeltaR_penalty
 
-                # loss on m2j
-                d, dPxPyPzE = networks.addFourVectors(0, 0, jPxPyPzE[:,:,(0,2,0,1,0,1)], jPxPyPzE[:,:,(1,3,2,3,3,2)])
-
-                rec_d, rec_dPxPyPzE = networks.addFourVectors(0, 0, rec_jPxPyPzE[:,:,(0,2,0,1,0,1)], rec_jPxPyPzE[:,:,(1,3,2,3,3,2)])
-                #mass_loss = F.mse_loss(d[:, 3:4,:], rec_d[:, 3:4,:], reduction = 'none').sum(dim=(1,2))
 
 
         # I would just take the sqrt here
         loss_batch = (mse_loss_batch).sqrt()
-
-        # You should only ever be taking the weighted mean over the batch, certainly not summing over events in the batch
-        # if reduction == 'mean':
-        #     loss_batch = loss_batch.mean() #+ mse_loss_batch_d + mse_loss_batch_q
-        # elif reduction == 'sum':
-        #     loss_batch = loss_batch.sum()
-        # else:
-        #     sys.exit("Reduction mode not valid. Exiting...")
 
         return loss_batch, rec_jPxPyPzE #, perm_index
 
@@ -335,7 +318,7 @@ class Model_AE:
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = 8, phi_rotations = rotate_phi, device = self.device)
+        self.network = networks.Basic_CNN_AE(dimension = 16, permute_input_jet = permute_input_jet, phi_rotations = rotate_phi, correct_DeltaR = correct_DeltaR, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
