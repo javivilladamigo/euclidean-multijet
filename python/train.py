@@ -16,7 +16,6 @@ import plots
 import json
 import itertools
 from operator import itemgetter
-from torch.utils.tensorboard import SummaryWriter
 
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1' #this doesn't work, need to run `conda env config vars set PYTORCH_ENABLE_MPS_FALLBACK=1` and then reactivate the conda environment
 
@@ -99,7 +98,7 @@ permutations = list(itertools.permutations([0,1,2,3]))
 loss_pt = False # whether to add pt to the loss of PxPyPzE
 permute_input_jet = False # whether to randomly permute the positions of input jets
 rotate_phi = False # whether to remove eta-phi invariances in the encoding
-correct_DeltaR = False # whether to correct DeltaR
+correct_DeltaR = True # whether to correct DeltaR
 
 testing = True
 if testing:
@@ -431,38 +430,6 @@ class Model_AE:
             plots.plot_PxPyPzEPtm2jm4j(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
             randomly_plotted_event_number = plots.plot_etaPhi_plane(self.train_result.j_, self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
             plots.plot_PxPy_plane(true_jPxPyPzE = self.train_result.j_, rec_jPxPyPzE = self.train_result.rec_j_, event_number = randomly_plotted_event_number, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
-        '''
-        if plot_res and self.epoch % plot_every == 0:
-            total_jPxPyPzE_ = torch.Tensor(())
-            total_rec_jPxPyPzE_ = torch.Tensor(())
-            total_m2j_ = torch.Tensor(())
-            total_rec_m2j_ = torch.Tensor(())
-            total_m4j_ = torch.Tensor(())
-            total_rec_m4j_ = torch.Tensor(())
-
-
-            for i, (j_, w_, R_, e_) in enumerate(self.train_result.infer_loader):
-                rec_jPxPyPzE_, jPxPyPzE_, rec_m2j_, m2j_, rec_m4j_, m4j_, dec_d_, d_, dec_q_, q_ = self.network(j_) # forward pass
-                n_batch = j_.shape[0]
-
-                #perm_idx = itemgetter(*self.train_result.train_best_perm)(permutations)
-                
-                #rec_jPxPyPzE_ = rec_jPxPyPzE_[:, :, :, perm_idx[self.n_done : self.n_done + n_batch]]
-                
-                total_m2j_ = torch.cat((total_m2j_, m2j_), 0)
-                total_rec_m2j_ = torch.cat((total_rec_m2j_, rec_m2j_), 0)
-
-                total_m4j_ = torch.cat((total_m4j_, m4j_), 0)
-                total_rec_m4j_ = torch.cat((total_rec_m4j_, rec_m4j_), 0)
-
-
-                total_j_ = torch.cat((total_jPxPyPzE_, jPxPyPzE_), 0)
-                total_rec_j_ = torch.cat((total_rec_jPxPyPzE_, rec_jPxPyPzE_), 0)
-
-                self.n_done += n_batch
-            self.n_done = 0
-
-            '''
 
 
             
@@ -499,19 +466,11 @@ class Model_AE:
         # self.train_inference()
         # self.valid_inference()
 
-        tb = SummaryWriter()
+
         
         for _ in range(num_epochs):
             self.run_epoch(plot_res = plot_res)
-            '''
-            for name, weight in self.network.named_parameters():
-                
-                tb.add_histogram(name, weight, self.epoch)
-                tb.add_histogram(f'{name}.grad',weight.grad, self.epoch)
-            '''
             
-            tb.add_scalar("Train loss", train_loss_tosave[-1], self.epoch)
-            tb.add_scalar("Val loss", val_loss_tosave[-1], self.epoch)
             if val_loss_tosave[-1] < min_val_loss and _ > 0:
                 self.del_prev_model()
                 self.save_model()
@@ -527,9 +486,6 @@ class Model_AE:
                 self.lr_change.append(self.epoch)
             #if val_loss_increase_counter == 100: #or min_val_loss < 1.:
                 #break
-
-        tb.flush()
-        tb.close()
             
         loss = {"train" : train_loss_tosave, "val" : val_loss_tosave}
         with open("loss.txt", 'w') as file:

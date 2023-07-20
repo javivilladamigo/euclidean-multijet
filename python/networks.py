@@ -602,7 +602,7 @@ class Basic_CNN_AE(nn.Module):
         if self.permute_input_jet:
             for i in range(j.shape[0]):
                 j_rot[i] = j[i, :, torch.randperm(4)]
-                
+
         # remove and return from Input_Embed
         '''
         d_rot, dPxPyPzE_rot = addFourVectors(   j_rot[:,:,(0,2,0,1,0,1)], 
@@ -688,8 +688,8 @@ class Basic_CNN_AE(nn.Module):
         dec_j_new[:,1:2,(0,2,0,1,0,1)] = (1 - mask_DeltaR_below_threshold.float()) * dec_j[:,1:2,(0,2,0,1,0,1)] + mask_DeltaR_below_threshold.float()*dec_j[:,1:2,(1,3,2,3,3,2)] + (0.16 - (mask_DeltaR_below_threshold.float()*deltaPhi)**2).sqrt()
         dec_j = dec_j_new.clone()
         '''
-        
-        dec_j = deltaR_correction(dec_j) if self.correct_DeltaR else dec_j
+
+        dec_j = deltaR_correction(dec_j) if self.correct_DeltaR and not self.training else dec_j
 
 
         '''
