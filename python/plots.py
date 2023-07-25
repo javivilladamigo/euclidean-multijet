@@ -5,10 +5,11 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import networks
+import matplotlib.cm as cm
 
 
-plt.rc('text', usetex=True)
-plt.rc('font', family='serif')
+plt.rc('text', usetex = True)
+plt.rc('font', family = 'serif', size = 22)
 
 
 def mkpath(path, debug=False):
@@ -107,11 +108,7 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
 
 
 def plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(true_val, reco_val, phi_rot, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
-    import matplotlib
-    #matplotlib.use('qtagg')
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-    #from fast_histogram import histogram2d
+    
 
     plot_masses = True
     if plot_masses:
@@ -220,12 +217,7 @@ def plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(true_val, reco_val, phi_rot,
     plt.close()
 
 
-def plot_training_residuals_PtEtaPhiEm2jm4j(true_val, reco_val, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
-    import matplotlib
-    #matplotlib.use('qtagg')
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-    #from fast_histogram import histogram2d
+def plot_training_residuals_PtEtaPhiEm2jm4j(true_val, reco_val, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors 
     plot_masses = True
     if plot_masses:
         d_rot, dPxPyPzE_rot = networks.addFourVectors(  true_val[:,:,(0,2,0,1,0,1)], 
@@ -317,11 +309,7 @@ def plot_training_residuals_PtEtaPhiEm2jm4j(true_val, reco_val, offset, epoch, s
 
 
 def plot_training_residuals_VAE(true_val, reco_val, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
-    import matplotlib
-    #matplotlib.use('qtagg')
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-    #from fast_histogram import histogram2d
+    
 
     true_val = true_val.detach()
     reco_val = reco_val.detach()
@@ -431,11 +419,7 @@ def plot_loss(loss, offset, epoch, sample, network_name):
     plt.close()
 
 def plot_PxPyPzEPtm2jm4j(true_val, reco_val, phi_rot, offset, epoch, sample, network_name):
-    import matplotlib
-    #matplotlib.use('qtagg')
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-    #from fast_histogram import histogram2d
+    
 
     plot_masses = True
     if plot_masses:
@@ -551,7 +535,7 @@ def plot_PxPyPzEPtm2jm4j(true_val, reco_val, phi_rot, offset, epoch, sample, net
     ax[1,3].set_xlabel('$\Delta R$')
     #ax[3].set_xlim(-100, 1000)
     ax[0,0].legend(loc = "best")
-    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
+    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.1, right=0.94, wspace=0.3, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
     path = f"plots/redec/{sample}/"
     mkpath(path)
@@ -560,11 +544,7 @@ def plot_PxPyPzEPtm2jm4j(true_val, reco_val, phi_rot, offset, epoch, sample, net
     plt.close()
 
 def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, offset, epoch, sample, network_name):
-    import matplotlib
-    #matplotlib.use('qtagg')
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-    #from fast_histogram import histogram2d
+    
 
     #true_E = (networks.PxPyPzE(true_val)[:, 3:4, :]).detach()
     #reco_E = (networks.PxPyPzE(reco_val)[:, 3:4, :]).detach()
@@ -622,11 +602,7 @@ def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, offse
     plt.close()
 
 def plot_loss_distr(j, loss_distr, loss_weights, offset, epoch, sample, network_name):
-    import matplotlib
-    #matplotlib.use('qtagg')
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-    #from fast_histogram import histogram2d
+    
 
     loss_weights = loss_weights.detach()
     loss_distr = loss_distr.detach()
@@ -685,12 +661,6 @@ def plot_loss_distr(j, loss_distr, loss_weights, offset, epoch, sample, network_
     plt.close()
 
 def plot_etaPhi_plane(jPxPyPzE, rec_jPxPyPzE, offset, epoch, sample, network_name): # expects [batch, (3) features, (4) jets] shaped tensors
-    import matplotlib
-    #matplotlib.use('qtagg')
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-    #from fast_histogram import histogram2d
-
     true_j = networks.PtEtaPhiM(jPxPyPzE)
     rec_j = networks.PtEtaPhiM(rec_jPxPyPzE)
     event_number = int(round(np.random.uniform()*true_j.shape[0]))
@@ -721,7 +691,7 @@ def plot_etaPhi_plane(jPxPyPzE, rec_jPxPyPzE, offset, epoch, sample, network_nam
     ax.set_xlabel('$\eta$')
     ax.set_ylabel('$\phi$')
 
-    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
+    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.1, right=0.94, wspace=0.3, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
     ax.legend(loc='best')
     path = f"plots/redec/{sample}/"
@@ -732,15 +702,7 @@ def plot_etaPhi_plane(jPxPyPzE, rec_jPxPyPzE, offset, epoch, sample, network_nam
     return event_number
 
 def plot_PxPy_plane(true_jPxPyPzE, rec_jPxPyPzE, event_number, offset, epoch, sample, network_name): # expects PxPy
-    import matplotlib
-    #matplotlib.use('qtagg')
-    import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
-    #from fast_histogram import histogram2d
-
     
-
-
     px_true = true_jPxPyPzE[event_number, 0, :].detach().flatten().numpy()
     px_rec = rec_jPxPyPzE[event_number, 0, :].detach().flatten().numpy()
 
@@ -769,8 +731,8 @@ def plot_PxPy_plane(true_jPxPyPzE, rec_jPxPyPzE, event_number, offset, epoch, sa
     ax.tick_params(which = 'minor', axis = 'both', direction='in', length = 0)
     ax.set_xlabel('$p_{x}\ ({\\rm GeV})$')
     ax.set_ylabel('$p_{y}\ ({\\rm GeV})$')
-
-    fig.subplots_adjust(top = 0.9, bottom=0.1, left = 0.06, right=0.94, wspace=0.3, hspace = 0.4)
+    
+    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.1, right=0.94, wspace=0.3, hspace = 0.4)
     fig.suptitle(f'Epoch {epoch}')
     ax.legend(loc='best')
     path = f"plots/redec/{sample}/"
