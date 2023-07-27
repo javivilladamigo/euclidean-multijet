@@ -21,7 +21,7 @@ from operator import itemgetter
 
 np.random.seed(0)
 torch.manual_seed(0)#make training results repeatable 
-
+plots.update_rcparams()
 SCREEN_WIDTH = 100
 
 '''
@@ -92,12 +92,12 @@ permute_input_jet = False   # whether to randomly permute the positions of input
 rotate_phi = False          # whether to remove eta-phi invariances in the encoding
 correct_DeltaR = False      # whether to correct DeltaR (in inference)
 
-testing = True
+testing = False
 if testing:
-    num_epochs = 20
+    num_epochs = 1
     plot_every = 1
 else:
-    num_epochs = 25
+    num_epochs = 20
     plot_every = 5
 
 lr_init  = 0.01
@@ -150,6 +150,11 @@ class Loader_Result:
         self.decoding_loss = torch.zeros(self.n)
         self.j_ = torch.zeros(self.n, 4, 4) # store vectors for plotting at the end of epoch   
         self.rec_j_ = torch.zeros(self.n, 4, 4)
+        self.z_ = torch.zeros(self.n, model.network.d_bottleneck, 1) # activations in the embedded space
+        self.m2j_ = torch.zeros(self.n, 1, 6)
+        self.m4j_ = torch.zeros(self.n, 1, 3)
+        self.rec_m2j_ = torch.zeros(self.n, 1, 6)
+        self.rec_m4j_ = torch.zeros(self.n, 1, 3)
         self.component_weights = torch.tensor([1,1,0.3,0.3]).view(1,4,1) # adapt magnitude of PxPy versus PzE
         self.n_done = 0
         self.loaded_die_loss = model.loaded_die_loss if hasattr(model, 'loaded_die_loss') else None
@@ -201,13 +206,18 @@ class Loader_Result:
 
         return loss_batch, rec_jPxPyPzE
 
-    def infer_batch_AE(self, jPxPyPzE, rec_jPxPyPzE, j, rec_j, phi_rotations, epoch, plot_every): # expecting same sized j and rec_j
+    def infer_batch_AE(self, jPxPyPzE, rec_jPxPyPzE, j, rec_j, z, m2j, m4j, rec_m2j, rec_m4j, phi_rotations, epoch, plot_every): # expecting same sized j and rec_j
         n_batch = rec_jPxPyPzE.shape[0]
         loss_batch, rec_jPxPyPzE = self.loss_fn(jPxPyPzE, rec_jPxPyPzE, j, rec_j, phi_rotations = phi_rotations)
 
-        if epoch % plot_every == 0 and self.train: # way of ensure we are saving jets from training dataset
+        if epoch % plot_every == 0 and self.train: # way of ensure we are saving jets and z from training dataset
             self.j_[self.n_done : self.n_done + n_batch] = jPxPyPzE
             self.rec_j_[self.n_done : self.n_done + n_batch] = rec_jPxPyPzE
+            self.z_[self.n_done : self.n_done + n_batch] = z
+            self.m2j_[self.n_done : self.n_done + n_batch] = m2j
+            self.m4j_[self.n_done : self.n_done + n_batch] = m4j
+            self.rec_m2j_[self.n_done : self.n_done + n_batch] = rec_m2j
+            self.rec_m4j_[self.n_done : self.n_done + n_batch] = rec_m4j
 
         self.decoding_loss[self.n_done : self.n_done + n_batch] = loss_batch
         self.n_done += n_batch
@@ -234,7 +244,7 @@ class Model_AE:
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = 8, permute_input_jet = permute_input_jet, phi_rotations = rotate_phi, correct_DeltaR = correct_DeltaR, device = self.device)
+        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = 4, permute_input_jet = permute_input_jet, phi_rotations = rotate_phi, correct_DeltaR = correct_DeltaR, return_masses = True, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -283,10 +293,10 @@ class Model_AE:
 
         # nb, event jets vector, weight, region, event number
         for batch_number, (j, w, R, e) in enumerate(result.infer_loader):
-            jPxPyPzE, rec_jPxPyPzE, j, rec_j = self.network(j)
+            jPxPyPzE, rec_jPxPyPzE, j, rec_j, z, m2j, m4j, rec_m2j, rec_m4j = self.network(j)
 
             
-            result.infer_batch_AE(jPxPyPzE, rec_jPxPyPzE, j, rec_j, self.network.phi_rotations, epoch = self.epoch, plot_every = plot_every)
+            result.infer_batch_AE(jPxPyPzE, rec_jPxPyPzE, j, rec_j, z, m2j, m4j, rec_m2j, rec_m4j, self.network.phi_rotations, epoch = self.epoch, plot_every = plot_every)
             
             percent = float(batch_number+1)*100/len(result.infer_loader)
             sys.stdout.write(f'\rEvaluating {percent:3.0f}%')
@@ -316,12 +326,12 @@ class Model_AE:
         for batch_number, (j, w, R, e) in enumerate(result.train_loader):
             self.optimizer.zero_grad()
 
-            jPxPyPzE, rec_jPxPyPzE, j, rec_j = self.network(j)
+            jPxPyPzE, rec_jPxPyPzE, j, rec_j, z, m2j, m4j, rec_m2j, rec_m4j = self.network(j)
 
             result.train_batch_AE(jPxPyPzE, rec_jPxPyPzE, j, rec_j, w, self.network.phi_rotations)
 
             percent = float(batch_number+1)*100/len(result.train_loader)
-            sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f}')
+            sys.stdout.write(f'\rTraining {percent:3.0f}% >>> Loss Estimate {result.loss_estimate:1.5f} GeV')
             sys.stdout.flush()
             self.optimizer.step()
         result.loss_estimate = 0
@@ -343,11 +353,11 @@ class Model_AE:
         self.valid_inference()
         self.scheduler.step()
         if plot_res and self.epoch % plot_every == 0:
-            plots.plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name) # plot training residuals for pt, eta, phi
-            plots.plot_PxPyPzEPtm2jm4j(self.train_result.j_, self.train_result.rec_j_, phi_rot = self.network.phi_rotations, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
-            randomly_plotted_event_number = plots.plot_etaPhi_plane(self.train_result.j_, self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
-            plots.plot_PxPy_plane(true_jPxPyPzE = self.train_result.j_, rec_jPxPyPzE = self.train_result.rec_j_, event_number = randomly_plotted_event_number, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
-
+            plots.plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(jPxPyPzE=self.train_result.j_, rec_jPxPyPzE=self.train_result.rec_j_, phi_rot=self.network.phi_rotations, m2j=self.train_result.m2j_, m4j=self.train_result.m4j_, rec_m2j=self.train_result.rec_m2j_, rec_m4j=self.train_result.rec_m4j_, offset=self.train_valid_offset, epoch=self.epoch, sample=self.sample, network_name=self.network.name) # plot training residuals for pt, eta, phi
+            plots.plot_PxPyPzEPtm2jm4j(jPxPyPzE=self.train_result.j_, rec_jPxPyPzE=self.train_result.rec_j_, phi_rot=self.network.phi_rotations, m2j=self.train_result.m2j_, m4j=self.train_result.m4j_, rec_m2j=self.train_result.rec_m2j_, rec_m4j=self.train_result.rec_m4j_, offset=self.train_valid_offset, epoch=self.epoch, sample=self.sample, network_name=self.network.name)
+            #randomly_plotted_event_number = plots.plot_etaPhi_plane(self.train_result.j_, self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            #plots.plot_PxPy_plane(true_jPxPyPzE = self.train_result.j_, rec_jPxPyPzE = self.train_result.rec_j_, event_number = randomly_plotted_event_number, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_activations_embedded_space(z=self.train_result.z_, offset=self.train_valid_offset, epoch=self.epoch, sample=self.sample, network_name=self.network.name)
 
             
 

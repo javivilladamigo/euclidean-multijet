@@ -319,11 +319,12 @@ def NonLU(x): #Pick the default non-Linear Unit
 # embed inputs in feature space
 #
 class Input_Embed(nn.Module):
-    def __init__(self, dimension, device='cpu', symmetrize=True):
+    def __init__(self, dimension, device='cpu', symmetrize=True, return_masses = False):
         super(Input_Embed, self).__init__()
         self.d = dimension
         self.device = device
         self.symmetrize = symmetrize
+        self.return_masses = return_masses
 
         # embed inputs to dijetResNetBlock in target feature space
         self.jet_embed     = Ghost_Batch_Norm(3, features_out=self.d, conv=True, name='jet embedder', device=self.device) # phi is relative to dijet, mass is zero in toy data. # 3 features -> 8 features
@@ -350,6 +351,10 @@ class Input_Embed(nn.Module):
                                      d[:,:,(1,3,5)], 
                                      v1PxPyPzE = dPxPyPzE[:,:,(0,2,4)],
                                      v2PxPyPzE = dPxPyPzE[:,:,(1,3,5)])
+        
+        if self.return_masses:
+            m2j = d[:, 3:4, :].clone()
+            m4j = q[:, 3:4, :].clone()
 
         # take log of pt, mass variables which have long tails
         # j = PxPyPzE(j)
@@ -371,10 +376,16 @@ class Input_Embed(nn.Module):
 
             q = torch.cat( (q[:,:2,:],q[:,3:,:]) , 1 ) # remove phi from quadjet features
 
-        return j, d, q
+        if self.return_masses:
+            return j, d, q, m2j, m4j
+        else:
+            return j, d, q
 
     def set_mean_std(self, j):
-        j, d, q = self.data_prep(j)
+        if self.return_masses:
+            j, d, q, _, _ = self.data_prep(j)
+        else:
+            j, d, q = self.data_prep(j)
 
         self    .jet_embed.set_mean_std(j[:,0:3])#mass is always zero in toy data
         self  .dijet_embed.set_mean_std(d)
@@ -390,7 +401,10 @@ class Input_Embed(nn.Module):
         self.quadjet_conv.set_ghost_batches(n_ghost_batches)
 
     def forward(self, j):
-        j, d, q = self.data_prep(j)
+        if self.return_masses:
+            j, d, q, m2j, m4j = self.data_prep(j)
+        else:
+            j, d, q = self.data_prep(j)
 
         j = self    .jet_embed(j[:,0:3])#mass is always zero in toy data
         d = self  .dijet_embed(d)
@@ -399,8 +413,11 @@ class Input_Embed(nn.Module):
         j = self    .jet_conv(NonLU(j))
         d = self  .dijet_conv(NonLU(d))
         q = self.quadjet_conv(NonLU(q))
-
-        return j, d, q
+        
+        if self.return_masses:
+            return j, d, q, m2j, m4j
+        else:
+            return j, d, q
 
 
 class Basic_CNN(nn.Module):
@@ -456,7 +473,7 @@ class Basic_CNN(nn.Module):
 
 
 class Basic_CNN_AE(nn.Module):
-    def __init__(self, dimension, bottleneck_dim = None, permute_input_jet = False, phi_rotations = False, correct_DeltaR = False, device = 'cpu'):
+    def __init__(self, dimension, bottleneck_dim = None, permute_input_jet = False, phi_rotations = False, correct_DeltaR = False, return_masses = False, device = 'cpu'):
         super(Basic_CNN_AE, self).__init__()
         self.device = device
         self.d = dimension
@@ -464,12 +481,13 @@ class Basic_CNN_AE(nn.Module):
         self.permute_input_jet = permute_input_jet
         self.phi_rotations = phi_rotations
         self.correct_DeltaR = correct_DeltaR
+        self.return_masses = return_masses
         self.n_ghost_batches = 64
         self.permutations = list(itertools.permutations([0,1,2,3]))
 
         self.name = f'Basic_CNN_AE_{self.d_bottleneck}'
 
-        self.input_embed            = Input_Embed(self.d, symmetrize=self.phi_rotations)
+        self.input_embed            = Input_Embed(self.d, symmetrize=self.phi_rotations, return_masses=self.return_masses)
         self.jets_to_dijets         = Ghost_Batch_Norm(self.d, stride=2, conv=True, device=self.device)
         self.dijets_to_quadjets     = Ghost_Batch_Norm(self.d, stride=2, conv=True, device=self.device)
         self.select_q               = Ghost_Batch_Norm(self.d, features_out=1, conv=True, bias=False, device=self.device)
@@ -544,7 +562,10 @@ class Basic_CNN_AE(nn.Module):
         #
         # Encode Block
         #
-        j, d, q = self.input_embed(j_rot)                                                       # j.shape = [batch_size, 8, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2
+        if self.return_masses:
+            j, d, q, m2j, m4j = self.input_embed(j_rot)                                         # j.shape = [batch_size, 8, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2       
+        else:
+            j, d, q = self.input_embed(j_rot)                                                   # j.shape = [batch_size, 8, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2
                                                                                                 # d.shape = [batch_size, 8, 6]  -> 6 = 01 23 02 13 03 12
                                                                                                 # q.shape = [batch_size, 8, 3]  -> 3 = 0123 0213 0312; 3 pixels each with 8 features
         d = d + NonLU(self.jets_to_dijets(j))                                                   # d.shape = [batch_size, 8, 6]
@@ -555,15 +576,15 @@ class Basic_CNN_AE(nn.Module):
         q_score = F.softmax(q_logits, dim=-1)                                                   # q_score.shape = [batch_size, 1, 3]
         q_logits = q_logits.view(-1, 3)                                                         # q_logits.shape = [batch_size, 3, 1]
         # add together the quadjets with their corresponding probability weight
-        e = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1] (8x3 · 3x1 = 8x1)
+        e_in = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1] (8x3 · 3x1 = 8x1)
 
 
 
         #
         # Bottleneck
         #
-        e = NonLU(self.bottleneck_in(e))
-        e = NonLU(self.bottleneck_out(e))
+        z = NonLU(self.bottleneck_in(e_in))
+        e_out = NonLU(self.bottleneck_out(z))
 
 
 
@@ -575,7 +596,7 @@ class Basic_CNN_AE(nn.Module):
         dec_j = NonLU(self.decode_2(dec_d)) # 2 pixel to 4
         dec_j =       self.decode_3(dec_j)  # down to four features per jet. Nonlinearity is sinh, cosh activations below
         '''
-        dec_q = NonLU(self.decode_q(e))                                                         # dec_q.shape = [batch_size, 8, 3] 0123 0213 0312
+        dec_q = NonLU(self.decode_q(e_out))                                                         # dec_q.shape = [batch_size, 8, 3] 0123 0213 0312
         dec_d = NonLU(self.dijets_from_quadjets(dec_q))                                         # dec_d.shape = [batch_size, 8, 6] 01 23 02 13 03 12
         dec_j = NonLU(self.jets_from_dijets(dec_d))                                             # dec_j.shape = [batch_size, 8, 12]; dec_j is interpreted as jets 0 1 2 3 0 2 1 3 0 3 1 2
         
@@ -608,21 +629,34 @@ class Basic_CNN_AE(nn.Module):
         Pt = dec_j[:,0:1].cosh()+39 # ensures pt is >=40 GeV
         Eta = dec_j[:,1:2]
         Phi = dec_j[:,2:3]
+        # M  = dec_j[:,3:4].cosh()-1 # >=0, in our case it is always zero for the toy data. we could relax this for real data
         M = dec_j[:,3:4].cosh()-1
+
+        rec_j = torch.cat((Pt, Eta, Phi, M), 1)
+        if self.return_masses:
+            rec_d, rec_dPxPyPzE = addFourVectors(   rec_j[:,:,(0,2,0,1,0,1)], 
+                                                    rec_j[:,:,(1,3,2,3,3,2)])
+            rec_q, rec_qPxPyPzE = addFourVectors(   rec_d[:,:,(0,2,4)],
+                                                    rec_d[:,:,(1,3,5)])
+            rec_m2j = rec_d[:, 3:4, :].clone()
+            rec_m4j = rec_q[:, 3:4, :].clone()
 
         Px = Pt*Phi.cos()
         Py = Pt*Phi.sin()
         Pz = Pt*Eta.sinh()
 
-        # M  =    dec_j[:,3:4].cosh()-1 # >=0, in our case it is always zero for the toy data. we could relax this for real data
+        
         # E  = (Pt**2+Pz**2+M**2).sqrt()   # ensures E^2>=M^2
         E  = (Pt**2+Pz**2).sqrt() # ensures E^2>=0. In our case M is zero so let's not include it
-        rec_j = torch.cat((Pt, Eta, Phi, M), 1)
-        rec_jPxPyPzE = torch.cat((Px, Py, Pz, E), 1)
         
+        rec_jPxPyPzE = torch.cat((Px, Py, Pz, E), 1)
+
         # # Nonlinearity for final output four-vector components
-        # rec_jPxPyPzE = torch.cat((dec_j[:,0:3,:].sinh(), dec_j[:,3:4,:].cosh()), dim=1)        
-        return jPxPyPzE, rec_jPxPyPzE, j_rot, rec_j
+        # rec_jPxPyPzE = torch.cat((dec_j[:,0:3,:].sinh(), dec_j[:,3:4,:].cosh()), dim=1)
+        if self.return_masses:
+            return jPxPyPzE, rec_jPxPyPzE, j_rot, rec_j, z, m2j, m4j, rec_m2j, rec_m4j    
+        else:
+            return jPxPyPzE, rec_jPxPyPzE, j_rot, rec_j, z
 
 
 
