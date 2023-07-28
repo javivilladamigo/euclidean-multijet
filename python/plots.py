@@ -148,9 +148,11 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
 
 
 
+########
 
-
-
+# upscale a bit the size of the markers on the plots
+EtaPhi_zscale = 10
+PxPy_zscale = 10
 
 def plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(jPxPyPzE, rec_jPxPyPzE, phi_rot, m2j=None, m4j=None, rec_m2j=None, rec_m4j=None, **kwargs):
     
@@ -370,6 +372,94 @@ def plot_PxPyPzEPtm2jm4j(jPxPyPzE, rec_jPxPyPzE, phi_rot, m2j=None, m4j=None, re
     print(f'PxPyPz saved to {path}')
     plt.close()
 
+def plot_etaPhi_plane(jPxPyPzE, rec_jPxPyPzE, **kwargs):
+    
+    # Get additional keyword arguments using kwargs.get()
+    offset = kwargs.get('offset')
+    epoch = kwargs.get('epoch')
+    sample = kwargs.get('sample')
+    network_name = kwargs.get('network_name')
+
+    # get the PtEtaPhiM representation of j
+    j = networks.PtEtaPhiM(jPxPyPzE)
+    rec_j = networks.PtEtaPhiM(rec_jPxPyPzE)
+    event_number = int(round(np.random.uniform()*j.shape[0])) # get the event number to plot the same for PxPyplane
+
+    # Pt
+    pt_true = j[event_number, 0, :].detach().flatten().numpy()
+    pt_rec = rec_j[event_number, 0, :].detach().flatten().numpy()
+    # Eta
+    eta_true = j[event_number, 1, :].detach().flatten().numpy()
+    eta_rec = rec_j[event_number, 1, :].detach().flatten().numpy()
+    # Phi
+    phi_true = j[event_number, 2, :].detach().flatten().numpy()
+    phi_rec = rec_j[event_number, 2, :].detach().flatten().numpy()
+    
+    # plots
+    fig, ax = plt.subplots(1, figsize=(10, 10))
+    for j in range(4):
+        ax.plot((eta_true[j], eta_rec[j]), (phi_true[j], phi_rec[j]), ls = 'dashed', color = 'grey', zorder = 1)
+    ax.scatter(eta_true, phi_true, s=EtaPhi_zscale*pt_true, color = reddish[0], label = f'True {event_number} event', zorder = 2)
+    ax.scatter(eta_rec, phi_rec, s=EtaPhi_zscale*pt_rec, color = mainblue[0], label = f'Reco {event_number} event', zorder = 2)
+    
+    # format
+    ax.set_xlim(-3, 3)
+    ax.set_ylim(-np.pi, np.pi)
+    ax.set_xlabel('$\eta$')
+    ax.set_ylabel('$\phi$')
+
+    # layout and plot
+    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.05, right=0.95, wspace=0.3, hspace = 0.4)
+    fig.suptitle(f'Epoch {epoch}')
+    ax.legend(loc='best')
+    path = f"plots/redec/{sample}/"
+    mkpath(path)
+    fig.savefig(f'{path}{sample}_etaPhiplane_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
+    print(f'EtaPhiplane saved to {path}')
+    plt.close()
+    return event_number
+
+def plot_PxPy_plane(jPxPyPzE, rec_jPxPyPzE, event_number = 0, **kwargs):
+    
+    # Get additional keyword arguments using kwargs.get()
+    offset = kwargs.get('offset')
+    epoch = kwargs.get('epoch')
+    sample = kwargs.get('sample')
+    network_name = kwargs.get('network_name')
+
+    # Px
+    px_true = jPxPyPzE[event_number, 0, :].detach().flatten().numpy()
+    px_rec = rec_jPxPyPzE[event_number, 0, :].detach().flatten().numpy()
+    # Py
+    py_true = jPxPyPzE[event_number, 1, :].detach().flatten().numpy()
+    py_rec = rec_jPxPyPzE[event_number, 1, :].detach().flatten().numpy()    
+    # Pz
+    # pz_true = jPxPyPzE[event_number, 2, :].detach().flatten().numpy()
+    # pz_rec = rec_jPxPyPzE[event_number, 2, :].detach().flatten().numpy()
+    # E
+    E_true = jPxPyPzE[event_number, 3, :].detach().flatten().numpy()
+    E_rec = rec_jPxPyPzE[event_number, 3, :].detach().flatten().numpy()
+    
+    # plots
+    fig, ax = plt.subplots(1, figsize = (10, 10))
+    for j in range(4):
+        ax.plot((px_true[j], px_rec[j]), (py_true[j], py_rec[j]), ls = 'dashed', color = 'grey', zorder = 1)
+    ax.scatter(px_true, py_true, s=PxPy_zscale*E_true, color = reddish[0], label = f'True {event_number} event', zorder = 2)
+    ax.scatter(px_rec, py_rec, s=PxPy_zscale*E_rec, color = mainblue[0], label = f'Reco {event_number} event', zorder = 2)
+
+    # format
+    ax.set_xlabel('$p_{x}\ ({\\rm GeV})$')
+    ax.set_ylabel('$p_{y}\ ({\\rm GeV})$')
+    
+    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.05, right=0.95, wspace=0.3, hspace = 0.4)
+    fig.suptitle(f'Epoch {epoch}')
+    ax.legend(loc='best')
+    path = f"plots/redec/{sample}/"
+    mkpath(path)
+    fig.savefig(f'{path}{sample}_PxPyplane_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
+    print(f'PxPyplane saved to {path}')
+    plt.close()
+
 def plot_activations_embedded_space(z, **kwargs):
     
     # Get additional keyword arguments using kwargs.get()
@@ -430,124 +520,35 @@ def plot_activations_embedded_space(z, **kwargs):
     print(f'Activations saved to {path}')
     plt.close()
 
-
-
 def plot_loss(loss, **kwargs):
+    
     # Get additional keyword arguments using kwargs.get()
     offset = kwargs.get('offset')
     epoch = kwargs.get('epoch')
     sample = kwargs.get('sample')
     network_name = kwargs.get('network_name')
 
+    # plot
     fig, ax = plt.subplots(1)
-    ax.set_yscale("log")
     x = np.arange(1, epoch+1)
     ax.plot(x,loss["train"], color = "r", label = "Train loss")
     ax.plot(x,loss["val"], color = "b", label = "Validation loss")
 
-    ax.legend(loc = "best")
+    # format
+    ax.set_yscale("log")
+    ax.set_xticks(np.arange(0, len(loss["train"]) + 1, len(loss["train"]) // 20)) if len(loss["train"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]) + 1, 2))
+    ax.tick_params(which = 'minor', axis = 'both' , direction='in', length = 0)
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Loss (GeV)')
-    ax.tick_params(which = 'minor', axis = 'both' , direction='in', length = 0)
-    ax.set_xticks(np.arange(0, len(loss["train"]) + 1, len(loss["train"]) // 20)) if len(loss["train"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]) + 1, 2))
+    
+    # layout and save
     fig.tight_layout()
+    ax.legend(loc = "best")
     path = f"plots/redec/{sample}/"
     mkpath(path)
     fig.savefig(f'{path}{sample}_loss_{network_name}_offset_{offset}_{epoch:03d}epochs.pdf')
     print(f'Losses saved to {path}')
     plt.close()
-
-def plot_etaPhi_plane(jPxPyPzE, rec_jPxPyPzE, **kwargs): # expects [batch, (3) features, (4) jets] shaped tensors
-    # Get additional keyword arguments using kwargs.get()
-    offset = kwargs.get('offset')
-    epoch = kwargs.get('epoch')
-    sample = kwargs.get('sample')
-    network_name = kwargs.get('network_name')
-
-    true_j = networks.PtEtaPhiM(jPxPyPzE)
-    rec_j = networks.PtEtaPhiM(rec_jPxPyPzE)
-    event_number = int(round(np.random.uniform()*true_j.shape[0]))
-
-    pt_true = true_j[event_number, 0, :].detach().flatten().numpy()
-    pt_rec = rec_j[event_number, 0, :].detach().flatten().numpy()
-
-    eta_true = true_j[event_number, 1, :].detach().flatten().numpy()
-    eta_rec = rec_j[event_number, 1, :].detach().flatten().numpy()
-    phi_true = true_j[event_number, 2, :].detach().flatten().numpy()
-    phi_rec = rec_j[event_number, 2, :].detach().flatten().numpy()
-    
-    coords = [eta_true, phi_true, eta_rec, phi_rec]         
-    #cmap = cm.get_cmap("bwr")
-    cmap = cm.get_cmap("viridis")
-    #cc.cm["CET_L17"].copy()
-    
-    fig, ax = plt.subplots(1)
-    for j in range(4):
-        ax.plot((eta_true[j], eta_rec[j]), (phi_true[j], phi_rec[j]), lw = 2, ls = 'dashed', color = 'grey')
-    ax.scatter(eta_true, phi_true, s=pt_true, color = 'red', label = f'True {event_number} event')
-    ax.scatter(eta_rec, phi_rec, s=pt_rec, color = 'blue', label = f'Reco {event_number} event')
-    ax.set_xlim(-3, 3)
-    ax.set_ylim(-np.pi, np.pi)
-    
-    ax.set_xlabel('$\eta$')
-    ax.set_ylabel('$\phi$')
-
-    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.1, right=0.94, wspace=0.3, hspace = 0.4)
-    fig.suptitle(f'Epoch {epoch}')
-    ax.legend(loc='best')
-    path = f"plots/redec/{sample}/"
-    mkpath(path)
-    fig.savefig(f'{path}{sample}_etaPhiplane_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
-    print(f'EtaPhiplane saved to {path}')
-    plt.close()
-    return event_number
-
-def plot_PxPy_plane(true_jPxPyPzE, rec_jPxPyPzE, **kwargs): # expects PxPy
-    
-    # Get additional keyword arguments using kwargs.get()
-    event_number = kwargs.get('event_number')
-    offset = kwargs.get('offset')
-    epoch = kwargs.get('epoch')
-    sample = kwargs.get('sample')
-    network_name = kwargs.get('network_name')
-
-    px_true = true_jPxPyPzE[event_number, 0, :].detach().flatten().numpy()
-    px_rec = rec_jPxPyPzE[event_number, 0, :].detach().flatten().numpy()
-
-    py_true = true_jPxPyPzE[event_number, 1, :].detach().flatten().numpy()
-    py_rec = rec_jPxPyPzE[event_number, 1, :].detach().flatten().numpy()
-    
-    pz_true = true_jPxPyPzE[event_number, 2, :].detach().flatten().numpy()
-    pz_rec = rec_jPxPyPzE[event_number, 2, :].detach().flatten().numpy()
-
-    E_true = true_jPxPyPzE[event_number, 3, :].detach().flatten().numpy()
-    E_rec = rec_jPxPyPzE[event_number, 3, :].detach().flatten().numpy()
-    
-    coords = [px_true, py_true, px_rec, py_rec]         
-    #cmap = cm.get_cmap("bwr")
-    cmap = cm.get_cmap("viridis")
-    #cc.cm["CET_L17"].copy()
-    
-    fig, ax = plt.subplots(1)
-    for j in range(4):
-        ax.plot((px_true[j], px_rec[j]), (py_true[j], py_rec[j]), lw = 2, ls = 'dashed', color = 'grey')
-    ax.scatter(px_true, py_true, s=E_true, color = 'red', label = f'True {event_number} event')
-    ax.scatter(px_rec, py_rec, s=E_rec, color = 'blue', label = f'Reco {event_number} event')
-    ax.set_xlabel('$p_{x}\ ({\\rm GeV})$')
-    ax.set_ylabel('$p_{y}\ ({\\rm GeV})$')
-    
-    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.1, right=0.94, wspace=0.3, hspace = 0.4)
-    fig.suptitle(f'Epoch {epoch}')
-    ax.legend(loc='best')
-    path = f"plots/redec/{sample}/"
-    mkpath(path)
-    fig.savefig(f'{path}{sample}_PxPyplane_{network_name}_offset_{offset}_epoch_{epoch:03d}.pdf')
-    print(f'PxPyplane saved to {path}')
-    plt.close()
-
-
-
-
 
 
 

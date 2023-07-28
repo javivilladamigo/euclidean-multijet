@@ -15,7 +15,7 @@ import networks
 import plots
 import json
 import itertools
-from operator import itemgetter
+
 
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1' #this doesn't work, need to run `conda env config vars set PYTORCH_ENABLE_MPS_FALLBACK=1` and then reactivate the conda environment
 
@@ -86,6 +86,7 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
+bottleneck_dim = 8
 permutations = list(itertools.permutations([0,1,2,3]))
 loss_pt = False             # whether to add pt to the loss of PxPyPzE
 permute_input_jet = False   # whether to randomly permute the positions of input jets
@@ -179,7 +180,7 @@ class Loader_Result:
             
             rec_j_perm = torch.zeros(*rec_j.shape, 24)
             rec_jPxPyPzE_perm = torch.zeros(*rec_jPxPyPzE.shape, 24)
-            for k, perm in enumerate(list(itertools.permutations([0,1,2,3]))):      # produce all possible jet permutations of reconstructed jets
+            for k, perm in enumerate(permutations):      # produce all possible jet permutations of reconstructed jets
                     rec_j_perm[:, :, :, k] = rec_j[:, :, perm]
                     rec_jPxPyPzE_perm[:, :, :, k] = rec_jPxPyPzE[:, :, perm]
             rec_j = rec_j_perm
@@ -244,7 +245,8 @@ class Model_AE:
         self.device = device
         self.train_valid_offset = train_valid_offset
         self.sample = sample
-        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = 4, permute_input_jet = permute_input_jet, phi_rotations = rotate_phi, correct_DeltaR = correct_DeltaR, return_masses = True, device = self.device)
+        self.return_masses = True # whether to return masses from the Input_Embed; this is used by the class member function K_fold 
+        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = bottleneck_dim, permute_input_jet = permute_input_jet, phi_rotations = rotate_phi, correct_DeltaR = correct_DeltaR, return_masses = self.return_masses, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -260,6 +262,7 @@ class Model_AE:
             print(f'Load {model_file}')
             model_name_parts = re.split(r'[/_]', model_file)
             self.task = model_name_parts[1]
+            print(f'The task of the model is {self.task}')
             self.train_valid_offset = model_name_parts[model_name_parts.index('offset')+1]
             self.model_pkl = model_file
             self.model_dict = torch.load(self.model_pkl)
@@ -303,7 +306,6 @@ class Model_AE:
             sys.stdout.flush()
 
         result.infer_done_AE()
-
 
     def train_inference(self):
         self.inference(self.train_result)
@@ -355,11 +357,10 @@ class Model_AE:
         if plot_res and self.epoch % plot_every == 0:
             plots.plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(jPxPyPzE=self.train_result.j_, rec_jPxPyPzE=self.train_result.rec_j_, phi_rot=self.network.phi_rotations, m2j=self.train_result.m2j_, m4j=self.train_result.m4j_, rec_m2j=self.train_result.rec_m2j_, rec_m4j=self.train_result.rec_m4j_, offset=self.train_valid_offset, epoch=self.epoch, sample=self.sample, network_name=self.network.name) # plot training residuals for pt, eta, phi
             plots.plot_PxPyPzEPtm2jm4j(jPxPyPzE=self.train_result.j_, rec_jPxPyPzE=self.train_result.rec_j_, phi_rot=self.network.phi_rotations, m2j=self.train_result.m2j_, m4j=self.train_result.m4j_, rec_m2j=self.train_result.rec_m2j_, rec_m4j=self.train_result.rec_m4j_, offset=self.train_valid_offset, epoch=self.epoch, sample=self.sample, network_name=self.network.name)
-            #randomly_plotted_event_number = plots.plot_etaPhi_plane(self.train_result.j_, self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
-            #plots.plot_PxPy_plane(true_jPxPyPzE = self.train_result.j_, rec_jPxPyPzE = self.train_result.rec_j_, event_number = randomly_plotted_event_number, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            randomly_plotted_event_number = plots.plot_etaPhi_plane(jPxPyPzE = self.train_result.j_, rec_jPxPyPzE = self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
+            plots.plot_PxPy_plane(jPxPyPzE = self.train_result.j_, rec_jPxPyPzE = self.train_result.rec_j_, event_number = randomly_plotted_event_number, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
             plots.plot_activations_embedded_space(z=self.train_result.z_, offset=self.train_valid_offset, epoch=self.epoch, sample=self.sample, network_name=self.network.name)
 
-            
 
         if (self.epoch in bs_milestones or self.epoch in lr_milestones) and self.network.n_ghost_batches:
             gb_decay = 4 #2 if self.epoch in bs_mile
@@ -371,7 +372,6 @@ class Model_AE:
             print(f'Decay learning rate: {self.lr_current} -> {self.lr_current*lr_scale}')
             self.lr_current *= lr_scale
             self.lr_change.append(self.epoch)
-
 
     def run_training(self, plot_res = False):
         min_val_loss = 1e20
@@ -404,8 +404,7 @@ class Model_AE:
         loss_tosave = {"train" : train_loss_tosave, "val" : val_loss_tosave}
         with open("loss.txt", 'w') as file:
             file.write(json.dumps(loss_tosave))
-        plots.plot_loss(loss_tosave, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
-        
+        plots.plot_loss(loss_tosave, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)        
     
     def save_model(self):
         self.history = {'train': self.train_result.history,
@@ -436,6 +435,7 @@ if __name__ == '__main__':
     parser.add_argument('-tk', '--task', default='FvT', type = str, help='Type of classifier (FvT or SvB) to run')
     parser.add_argument('-o', '--offset', default=0, type=int, help='k-folding offset for split between training/validation sets')
     parser.add_argument('-m', '--model', default='', type=str, help='Load these models (* wildcard for offsets)')
+    parser.add_argument('-s', '--sample', default='', type=str, help='Load these models for sample synthetic datasets (* wildcard for offsets)')
     args = parser.parse_args()
 
     
@@ -539,11 +539,8 @@ if __name__ == '__main__':
     Pre-compute friend TTrees with the validation results after training
     '''
     if args.model:
-        
         # task is specified as the three letters before "_Basic" in model filename
         task = args.model[0:3] if '/' not in args.model else args.model[args.model.find('/') + 1 : args.model.find('/') + 4]
-      
-        
         # Task is classification (either FvT or SvB)
         if task == 'FvT' or task == 'SvB':
             classes = FvT_classes if task == 'FvT' else SvB_classes if task == 'SvB' else None
@@ -604,6 +601,7 @@ if __name__ == '__main__':
                 models.append(Model_AE(model_file=model_file))
 
             task = models[0].task
+            epoch_string = model_files[0][model_files[0].find('epoch') + 6 : model_files[0].find('epoch')+ 9]
             kfold = networks.K_Fold([model.network for model in models], task = task)
 
             import uproot
@@ -616,29 +614,88 @@ if __name__ == '__main__':
                 coffea_files = sorted(glob(picoAOD.replace('.root','*.coffea')))
                 event = load(coffea_files)
                 j, e = coffea_to_tensor(event, decode = True, kfold=True)
-                rec_j = kfold(j, e)
+                rec_j, z = kfold(j, e) # output reconstructed jets and embedded space
 
-
+                plots.mkpath("activations/")
+                torch.save(z, f"activations/z_{models[0].network.d_bottleneck}_epoch_{epoch_string}.pkl")
+                print(f"Saved embedded space tensor to activations/z_{models[0].network.d_bottleneck}_epoch_{epoch_string}.pkl")
+                
+                # create np arrays to fill each element with the 4 quantities corresponding to the event
+                pt_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
+                eta_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
+                phi_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
+                mass_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
 
                 with uproot.recreate(output_file) as output:
                     kfold_dict = {}
 
+                    for jet_nb in range(rec_j.shape[2]): # go through each of the 4 jets
+                        pt_array[:, jet_nb]     = rec_j[:, 0, jet_nb].numpy()
+                        eta_array[:, jet_nb]    = rec_j[:, 1, jet_nb].numpy()
+                        phi_array[:, jet_nb]    = rec_j[:, 2, jet_nb].numpy()
+                        mass_array[:, jet_nb]   = rec_j[:, 3, jet_nb].numpy()
 
-                    kfold_dict['nJet'] = rec_j.shape[2]
-                    for jet_nb in range(rec_j.shape[2]):
-                        
-                        kfold_dict[f'Jet{jet_nb + 1}_pt']   = rec_j[:, 0, jet_nb].numpy()
-                        kfold_dict[f'Jet{jet_nb + 1}_eta']  = rec_j[:, 1, jet_nb].numpy()
-                        kfold_dict[f'Jet{jet_nb + 1}_phi']  = rec_j[:, 2, jet_nb].numpy()
-                        kfold_dict[f'Jet{jet_nb + 1}_mass'] = rec_j[:, 3, jet_nb].numpy()
+                    # Store jet properties as 2D arrays in kfold_dict
+                    kfold_dict['Jet_pt'] = pt_array
+                    kfold_dict['Jet_eta'] = eta_array
+                    kfold_dict['Jet_phi'] = phi_array
+                    kfold_dict['Jet_mass'] = mass_array
 
-                    #kfold_dict["preselection"] = np.array(event.preselection)
-                    #kfold_dict["SR"] = np.array(event.SR)
-                    #kfold_dict["SB"] = np.array(event.SB)
-                    
-                    output['Events'] = {task: ak.zip(kfold_dict)}
+                    # Write the dict to the output file
+                    output["Events"] = kfold_dict
+
         else:
             sys.exit("Task not found in model filename. Write models/(dec, SvB, FvT)_Basic[...]")
     
-    if not args.train and not args.model:
+    '''
+    Pre-compute friend TTrees with synthetic datasets
+    '''
+    if args.sample:
+        # task is specified as the three letters before "_Basic" in model filename
+        task = 'sample'
+        model_files = sorted(glob(args.model))
+        models = []
+        for model_file in model_files:
+            models.append(Model_AE(model_file=model_file, task = task))
+
+        
+        kfold = networks.K_Fold([model.network for model in models], task = task)
+
+        import uproot
+        import awkward as ak
+
+        picoAODs = glob('data/*picoAOD.root')
+        for picoAOD in picoAODs:
+            output_file = picoAOD.replace('picoAOD', task)
+            print(f'Generate kfold output for {picoAOD} -> {output_file}')
+            coffea_files = sorted(glob(picoAOD.replace('.root','*.coffea')))
+            event = load(coffea_files)
+            j, e = coffea_to_tensor(event, decode = True, kfold=True)
+            rec_j = kfold(j, e)
+
+            # create np arrays to fill each element with the 4 quantities corresponding to the event
+            pt_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
+            eta_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
+            phi_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
+            mass_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
+
+            with uproot.recreate(output_file) as output:
+                kfold_dict = {}
+
+                for jet_nb in range(rec_j.shape[2]): # go through each of the 4 jets
+                    pt_array[:, jet_nb]     = rec_j[:, 0, jet_nb].numpy()
+                    eta_array[:, jet_nb]    = rec_j[:, 1, jet_nb].numpy()
+                    phi_array[:, jet_nb]    = rec_j[:, 2, jet_nb].numpy()
+                    mass_array[:, jet_nb]   = rec_j[:, 3, jet_nb].numpy()
+
+                # Store jet properties as 2D arrays in kfold_dict
+                kfold_dict['Jet_pt'] = pt_array
+                kfold_dict['Jet_eta'] = eta_array
+                kfold_dict['Jet_phi'] = phi_array
+                kfold_dict['Jet_mass'] = mass_array
+
+                # Write the dict to the output file
+                output["Events"] = kfold_dict
+    
+    if not args.train and not args.model and not args.sample:
         sys.exit("No --train nor --model specified. Script is not training nor precomputing friend TTrees. Exiting...")
