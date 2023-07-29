@@ -86,19 +86,22 @@ def coffea_to_tensor(event, device='cpu', decode = False, kfold=False):
 '''
 Architecture hyperparameters
 '''
-bottleneck_dim = 8
+bottleneck_dim = 6
 permutations = list(itertools.permutations([0,1,2,3]))
-loss_pt = False             # whether to add pt to the loss of PxPyPzE
-permute_input_jet = False   # whether to randomly permute the positions of input jets
-rotate_phi = False          # whether to remove eta-phi invariances in the encoding
-correct_DeltaR = False      # whether to correct DeltaR (in inference)
+loss_pt = False                 # whether to add pt to the loss of PxPyPzE
+permute_input_jet = False       # whether to randomly permute the positions of input jets
+rotate_phi = False              # whether to remove eta-phi invariances in the encoding
+correct_DeltaR = False          # whether to correct DeltaR (in inference)
+
+sample = 'fourTag_10x'
 
 testing = False
+plot_training_progress = True  # plot training progress
 if testing:
     num_epochs = 1
     plot_every = 1
 else:
-    num_epochs = 20
+    num_epochs = 25
     plot_every = 5
 
 lr_init  = 0.01
@@ -240,13 +243,14 @@ class Loader_Result:
 Model used for autoencoding
 '''
 class Model_AE:
-    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = '', sample = ''):
-        self.task = task
-        self.device = device
+    def __init__(self, train_valid_offset = 0, device = 'cpu', task = 'dec', model_file = '', sample = '', generate_synthetic_dataset = False):
         self.train_valid_offset = train_valid_offset
+        self.device = device
+        self.task = task
         self.sample = sample
-        self.return_masses = True # whether to return masses from the Input_Embed; this is used by the class member function K_fold 
-        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = bottleneck_dim, permute_input_jet = permute_input_jet, phi_rotations = rotate_phi, correct_DeltaR = correct_DeltaR, return_masses = self.return_masses, device = self.device)
+        self.generate_synthetic_dataset = generate_synthetic_dataset
+        self.return_masses = True # whether to return masses from the Input_Embed; this is used by the class member function K_fold
+        self.network = networks.Basic_CNN_AE(dimension = 16, bottleneck_dim = bottleneck_dim, permute_input_jet = permute_input_jet, phi_rotations = rotate_phi, correct_DeltaR = correct_DeltaR, return_masses = self.return_masses, device = self.device) if not self.generate_synthetic_dataset else networks.Basic_decoder(dimension = 16, bottleneck_dim = bottleneck_dim, correct_DeltaR = correct_DeltaR, return_masses = self.return_masses, n_ghost_batches = 64, device = self.device)
         self.network.to(self.device)
         n_trainable_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
         print(f'Network has {n_trainable_parameters} trainable parameters')
@@ -261,13 +265,17 @@ class Model_AE:
         if model_file:
             print(f'Load {model_file}')
             model_name_parts = re.split(r'[/_]', model_file)
-            self.task = model_name_parts[1]
+            self.task = model_name_parts[1] if not self.generate_synthetic_dataset else "gen"
             print(f'The task of the model is {self.task}')
             self.train_valid_offset = model_name_parts[model_name_parts.index('offset')+1]
             self.model_pkl = model_file
             self.model_dict = torch.load(self.model_pkl)
-            self.network.load_state_dict(self.model_dict['model'])
-            self.optimizer.load_state_dict(self.model_dict['optimizer'])
+            if self.generate_synthetic_dataset: # separate this as we do not need the optimizer
+                self.network.load_state_dict(self.model_dict['decoder'])
+                self.network.eval()
+            else:
+                self.network.load_state_dict(self.model_dict['model'])
+                self.optimizer.load_state_dict(self.model_dict['optimizer'])
             self.epoch = self.model_dict['epoch']
         
     def make_loaders(self, event):
@@ -347,14 +355,14 @@ class Model_AE:
         self.train_result.train_loader = DataLoader(dataset=self.train_result.dataset, batch_size=new_batch_size, shuffle=True, num_workers=num_workers, pin_memory=True, drop_last=True)
         self.bs_change.append(self.epoch)
 
-    def run_epoch(self, plot_res):
+    def run_epoch(self, plot_training_progress):
         
         self.epoch += 1
         self.train()
         self.train_inference()        
         self.valid_inference()
         self.scheduler.step()
-        if plot_res and self.epoch % plot_every == 0:
+        if plot_training_progress and self.epoch % plot_every == 0:
             plots.plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(jPxPyPzE=self.train_result.j_, rec_jPxPyPzE=self.train_result.rec_j_, phi_rot=self.network.phi_rotations, m2j=self.train_result.m2j_, m4j=self.train_result.m4j_, rec_m2j=self.train_result.rec_m2j_, rec_m4j=self.train_result.rec_m4j_, offset=self.train_valid_offset, epoch=self.epoch, sample=self.sample, network_name=self.network.name) # plot training residuals for pt, eta, phi
             plots.plot_PxPyPzEPtm2jm4j(jPxPyPzE=self.train_result.j_, rec_jPxPyPzE=self.train_result.rec_j_, phi_rot=self.network.phi_rotations, m2j=self.train_result.m2j_, m4j=self.train_result.m4j_, rec_m2j=self.train_result.rec_m2j_, rec_m4j=self.train_result.rec_m4j_, offset=self.train_valid_offset, epoch=self.epoch, sample=self.sample, network_name=self.network.name)
             randomly_plotted_event_number = plots.plot_etaPhi_plane(jPxPyPzE = self.train_result.j_, rec_jPxPyPzE = self.train_result.rec_j_, offset = self.train_valid_offset, epoch = self.epoch, sample = self.sample, network_name = self.network.name)
@@ -373,7 +381,7 @@ class Model_AE:
             self.lr_current *= lr_scale
             self.lr_change.append(self.epoch)
 
-    def run_training(self, plot_res = False):
+    def run_training(self, plot_training_progress = False):
         min_val_loss = 1e20
         val_loss_increase_counter = 0
         self.network.set_mean_std(self.train_result.dataset.tensors[0])
@@ -383,7 +391,7 @@ class Model_AE:
 
         
         for _ in range(num_epochs):
-            self.run_epoch(plot_res = plot_res)
+            self.run_epoch(plot_training_progress = plot_training_progress)
             
             if val_loss_tosave[-1] < min_val_loss and _ > 0:
                 self.del_prev_model()
@@ -410,6 +418,7 @@ class Model_AE:
         self.history = {'train': self.train_result.history,
                         'valid': self.valid_result.history}
         self.model_dict = {'model': deepcopy(self.network.state_dict()),
+                           'decoder': deepcopy(self.network.decoder.state_dict()),
                            'optimizer': deepcopy(self.optimizer.state_dict()),
                            'epoch': self.epoch,
                            'history': copy(self.history)}
@@ -435,7 +444,7 @@ if __name__ == '__main__':
     parser.add_argument('-tk', '--task', default='FvT', type = str, help='Type of classifier (FvT or SvB) to run')
     parser.add_argument('-o', '--offset', default=0, type=int, help='k-folding offset for split between training/validation sets')
     parser.add_argument('-m', '--model', default='', type=str, help='Load these models (* wildcard for offsets)')
-    parser.add_argument('-s', '--sample', default='', type=str, help='Load these models for sample synthetic datasets (* wildcard for offsets)')
+    parser.add_argument('-g', '--generate', default=False, action='store_true', help='To be passed with --model and the specific models to generate data')
     args = parser.parse_args()
 
     
@@ -516,8 +525,6 @@ if __name__ == '__main__':
 
         # task is autoencoding
         if task == 'dec':
-            sample = 'fourTag'
-            # sample = 'threeTag'
             coffea_file = sorted(glob(f'data/{sample}_picoAOD*.coffea')) # file used for autoencoding
             
             # Load data
@@ -528,7 +535,7 @@ if __name__ == '__main__':
                             'train_valid_offset': args.offset}
             t=Model_AE(**model_args, sample = sample)
             t.make_loaders(event)
-            t.run_training(plot_res = True)
+            t.run_training(plot_training_progress = plot_training_progress)
 
             
             
@@ -538,7 +545,7 @@ if __name__ == '__main__':
     '''
     Pre-compute friend TTrees with the validation results after training
     '''
-    if args.model:
+    if args.model and not args.generate:
         # task is specified as the three letters before "_Basic" in model filename
         task = args.model[0:3] if '/' not in args.model else args.model[args.model.find('/') + 1 : args.model.find('/') + 4]
         # Task is classification (either FvT or SvB)
@@ -600,8 +607,9 @@ if __name__ == '__main__':
             for model_file in model_files:
                 models.append(Model_AE(model_file=model_file))
 
-            task = models[0].task
+            d = models[0].network.d_bottleneck
             epoch_string = model_files[0][model_files[0].find('epoch') + 6 : model_files[0].find('epoch')+ 9]
+
             kfold = networks.K_Fold([model.network for model in models], task = task)
 
             import uproot
@@ -616,10 +624,11 @@ if __name__ == '__main__':
                 j, e = coffea_to_tensor(event, decode = True, kfold=True)
                 rec_j, z = kfold(j, e) # output reconstructed jets and embedded space
 
+                activation_file = picoAOD.replace('data/', 'activations/').replace('picoAOD.root', f'z_{d}_epoch_{epoch_string}.pkl')
                 plots.mkpath("activations/")
-                torch.save(z, f"activations/z_{models[0].network.d_bottleneck}_epoch_{epoch_string}.pkl")
-                print(f"Saved embedded space tensor to activations/z_{models[0].network.d_bottleneck}_epoch_{epoch_string}.pkl")
-                
+                torch.save({'activations' : z}, activation_file)
+                print(f"Saved embedded space tensor to {activation_file}")
+
                 # create np arrays to fill each element with the 4 quantities corresponding to the event
                 pt_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
                 eta_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
@@ -650,28 +659,32 @@ if __name__ == '__main__':
     '''
     Pre-compute friend TTrees with synthetic datasets
     '''
-    if args.sample:
-        # task is specified as the three letters before "_Basic" in model filename
-        task = 'sample'
+    if args.generate:
+        task = 'gen'
         model_files = sorted(glob(args.model))
         models = []
         for model_file in model_files:
-            models.append(Model_AE(model_file=model_file, task = task))
-
+            models.append(Model_AE(model_file=model_file, task = task, generate_synthetic_dataset = True))
         
+        d = models[0].network.d_bottleneck
+        epoch_string = model_files[0][model_files[0].find('epoch') + 6 : model_files[0].find('epoch')+ 9]
+
         kfold = networks.K_Fold([model.network for model in models], task = task)
 
         import uproot
         import awkward as ak
 
+        plots.mkpath("activations/")
         picoAODs = glob('data/*picoAOD.root')
         for picoAOD in picoAODs:
+            activations_file = picoAOD.replace('data/', 'activations/').replace('picoAOD.root', f'z_{d}_epoch_{epoch_string}.pkl')
             output_file = picoAOD.replace('picoAOD', task)
-            print(f'Generate kfold output for {picoAOD} -> {output_file}')
-            coffea_files = sorted(glob(picoAOD.replace('.root','*.coffea')))
-            event = load(coffea_files)
-            j, e = coffea_to_tensor(event, decode = True, kfold=True)
-            rec_j = kfold(j, e)
+            print(f'Generate kfold generated output for {activations_file} -> {output_file}')
+            activations = torch.load(activations_file)["activations"]
+            e = torch.LongTensor(np.arange(activations.shape[0], dtype=np.uint8)) % train_valid_modulus
+            print("loaded z shape from picoAOD:", activations.shape)
+            rec_j = kfold(activations, e)
+            print("extracted kfold jets shape:", rec_j.shape)
 
             # create np arrays to fill each element with the 4 quantities corresponding to the event
             pt_array = np.zeros((rec_j.shape[0], rec_j.shape[2]))
@@ -697,5 +710,5 @@ if __name__ == '__main__':
                 # Write the dict to the output file
                 output["Events"] = kfold_dict
     
-    if not args.train and not args.model and not args.sample:
+    if not args.train and not args.model and not args.generate:
         sys.exit("No --train nor --model specified. Script is not training nor precomputing friend TTrees. Exiting...")

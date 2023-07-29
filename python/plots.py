@@ -20,18 +20,18 @@ def update_rcparams():
         "text.usetex": True,
         "font.family": "serif",
         
-        'legend.fontsize': 40,
+        'legend.fontsize': 30,
         "xtick.direction": "in",
         "ytick.direction": "in",
-        "xtick.major.size": 6,
+        "xtick.major.size": 8,
         'xtick.major.width': 1.,
-        "ytick.major.size": 6,
+        "ytick.major.size": 8,
         'ytick.major.width': 1.,
         "xtick.minor.visible": True,
         "ytick.minor.visible": True,
-        "xtick.minor.size": 3,
+        "xtick.minor.size": 4,
         'xtick.minor.width': 0.8,
-        "ytick.minor.size": 3,
+        "ytick.minor.size": 4,
         'ytick.minor.width': 0.8,
         'axes.labelpad': 5.0,
         #"xtick.major.pad": 7,
@@ -151,8 +151,8 @@ def sample2D(hdict, sample, var, cut='preselection', region='SB', name='', xlim=
 ########
 
 # upscale a bit the size of the markers on the plots
-EtaPhi_zscale = 10
-PxPy_zscale = 10
+EtaPhi_zscale = 2
+PxPy_zscale = 2
 
 def plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(jPxPyPzE, rec_jPxPyPzE, phi_rot, m2j=None, m4j=None, rec_m2j=None, rec_m4j=None, **kwargs):
     
@@ -233,17 +233,17 @@ def plot_training_residuals_PxPyPzEm2jm4jPtm2jvsm4j(jPxPyPzE, rec_jPxPyPzE, phi_
 
 
     # axis labels
-    ax[0, 0].set_xlabel('True $p_{x}\ ({\\rm GeV})$');    ax[0, 0].set_ylabel('Reco - true $p_{x}\ ({\\rm GeV})$')
-    ax[0, 1].set_xlabel('True $p_{y}\ ({\\rm GeV})$');    ax[0, 1].set_ylabel('Reco - true $p_{y}\ ({\\rm GeV})$')
-    ax[0, 2].set_xlabel('True $p_{z}\ ({\\rm GeV})$');    ax[0, 2].set_ylabel('Reco - true $p_{z}\ ({\\rm GeV})$')
+    ax[0, 0].set_xlabel('True $p_{x}\ ({\mathrm{GeV}})$');    ax[0, 0].set_ylabel('Reco - true $p_{x}\ ({\mathrm{GeV}})$')
+    ax[0, 1].set_xlabel('True $p_{y}\ ({\mathrm{GeV}})$');    ax[0, 1].set_ylabel('Reco - true $p_{y}\ ({\mathrm{GeV}})$')
+    ax[0, 2].set_xlabel('True $p_{z}\ ({\mathrm{GeV}})$');    ax[0, 2].set_ylabel('Reco - true $p_{z}\ ({\mathrm{GeV}})$')
     ax[1, 0].set_xlabel('True $E\ ({\\rm GeV)}$');        ax[1, 0].set_ylabel('Reco - true $E\ ({\\rm GeV)}$')
-    ax[1, 1].set_xlabel('True $p_{T}\ ({\\rm GeV})$');    ax[1, 1].set_ylabel('Reco - true $p_{T}\ ({\\rm GeV})$')
-    ax[1, 2].set_xlabel('True $m_{2j}\ ({\\rm GeV})$');   ax[1, 2].set_ylabel('Reco - true $m_{2j}\ ({\\rm GeV})$')
-    ax[2, 0].set_xlabel('True $m_{4j}\ ({\\rm GeV})$');   ax[2, 0].set_ylabel('Reco - true $m_{4j}\ ({\\rm GeV})$')
-    ax[2, 1].set_xlabel('True $m_{4j}\ ({\\rm GeV})$')
-    ax[2, 1].set_ylabel('True $m_{2j}\ ({\\rm GeV})$')
-    ax[2, 2].set_xlabel('Reco $m_{4j}\ ({\\rm GeV})$')
-    ax[2, 2].set_ylabel('Reco $m_{2j}\ ({\\rm GeV})$')
+    ax[1, 1].set_xlabel('True $p_{T}\ ({\mathrm{GeV}})$');    ax[1, 1].set_ylabel('Reco - true $p_{T}\ ({\mathrm{GeV}})$')
+    ax[1, 2].set_xlabel('True $m_{2j}\ ({\mathrm{GeV}})$');   ax[1, 2].set_ylabel('Reco - true $m_{2j}\ ({\mathrm{GeV}})$')
+    ax[2, 0].set_xlabel('True $m_{4j}\ ({\mathrm{GeV}})$');   ax[2, 0].set_ylabel('Reco - true $m_{4j}\ ({\mathrm{GeV}})$')
+    ax[2, 1].set_xlabel('True $m_{4j}\ ({\mathrm{GeV}})$')
+    ax[2, 1].set_ylabel('True $m_{2j}\ ({\mathrm{GeV}})$')
+    ax[2, 2].set_xlabel('Reco $m_{4j}\ ({\mathrm{GeV}})$')
+    ax[2, 2].set_ylabel('Reco $m_{2j}\ ({\mathrm{GeV}})$')
     
 
     # get the im that contains the h2d with the highest value and make the colorbar map that im
@@ -305,7 +305,7 @@ def plot_PxPyPzEPtm2jm4j(jPxPyPzE, rec_jPxPyPzE, phi_rot, m2j=None, m4j=None, re
 
     # plot PxPyPzE on first row
     width = 10 # GeV
-    for j, feature in enumerate(["$p_{x}\ ({\\rm GeV})$", "$p_{y}\ ({\\rm GeV})$", "$p_{z}\ ({\\rm GeV})$", "$E\ ({\\rm GeV)}$"]):
+    for j, feature in enumerate(["$p_{x}\ ({\mathrm{GeV}})$", "$p_{y}\ ({\mathrm{GeV}})$", "$p_{z}\ ({\mathrm{GeV}})$", "$E\ ({\\rm GeV)}$"]):
         if j == 3: width = 50
         nbins = int(round(max(jPxPyPzE[:, j, :].flatten().numpy()) - min(jPxPyPzE[:, j, :].flatten().numpy())) / width) + 1
         h, bins1, _ = ax[0, j].hist(jPxPyPzE[:, j, :].flatten().numpy(), color = "firebrick", histtype = "step", linewidth = plt.rcParams["lines.linewidth"], bins = nbins)
@@ -326,7 +326,7 @@ def plot_PxPyPzEPtm2jm4j(jPxPyPzE, rec_jPxPyPzE, phi_rot, m2j=None, m4j=None, re
     h, bins1, _ = ax[1, 0].hist(pt.flatten().numpy(), color = "firebrick", label = "True", histtype = "step", linewidth = plt.rcParams["lines.linewidth"], bins = nbins)
     nbins = int(round(max(rec_pt.flatten().numpy()) - min(rec_pt.flatten().numpy())) / width) + 1
     ax[1, 0].hist(rec_pt.flatten().numpy(), color = "blue", label = "Reco", histtype = "step", linewidth = plt.rcParams["lines.linewidth"], bins = bins1)
-    ax[1, 0].set_xlabel('$p_{T}\ ({\\rm GeV})$')
+    ax[1, 0].set_xlabel('$p_{T}\ ({\mathrm{GeV}})$')
     ax[1, 0].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
     ax[1, 0].set_yscale('log')
 
@@ -337,7 +337,7 @@ def plot_PxPyPzEPtm2jm4j(jPxPyPzE, rec_jPxPyPzE, phi_rot, m2j=None, m4j=None, re
         h, bins1, _ = ax[1, 1].hist(m2j.flatten().numpy(), color = "firebrick", histtype = "step", linewidth = plt.rcParams["lines.linewidth"], bins = nbins)
         nbins = int(round(max(rec_m2j.flatten().numpy()) - min(rec_m2j.flatten().numpy())) / width) + 1
         ax[1, 1].hist(rec_m2j.flatten().numpy(), color = "blue", histtype = "step", linewidth = plt.rcParams["lines.linewidth"], bins = bins1)
-        ax[1, 1].set_xlabel('$m_{2j}\ ({\\rm GeV})$')
+        ax[1, 1].set_xlabel('$m_{2j}\ ({\mathrm{GeV}})$')
         ax[1, 1].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
         ax[1, 1].set_xlim(-100, 2500)
         ax[1, 1].set_yscale('log')
@@ -348,7 +348,7 @@ def plot_PxPyPzEPtm2jm4j(jPxPyPzE, rec_jPxPyPzE, phi_rot, m2j=None, m4j=None, re
         h, bins1, _ = ax[1, 2].hist(m4j.flatten().numpy(), color = "firebrick", histtype = "step", linewidth = plt.rcParams["lines.linewidth"], bins = nbins)
         nbins = int(round(max(rec_m4j.flatten().numpy()) - min(rec_m4j.flatten().numpy())) / width) + 1
         ax[1, 2].hist(rec_m4j.flatten().numpy(), color = "blue", histtype = "step", linewidth = plt.rcParams["lines.linewidth"], bins = bins1)
-        ax[1, 2].set_xlabel('$m_{4j}\ ({\\rm GeV})$')
+        ax[1, 2].set_xlabel('$m_{4j}\ ({\mathrm{GeV}})$')
         ax[1, 2].set_ylabel(f'Events / {(bins1[1]-bins1[0]):.1f} GeV')
         ax[1, 2].set_xlim(-100, 2500)
         ax[1, 2].set_yscale('log')
@@ -396,21 +396,33 @@ def plot_etaPhi_plane(jPxPyPzE, rec_jPxPyPzE, **kwargs):
     phi_rec = rec_j[event_number, 2, :].detach().flatten().numpy()
     
     # plots
-    fig, ax = plt.subplots(1, figsize=(10, 10))
+    fig, ax = plt.subplots(1, figsize=(20, 10))
     for j in range(4):
         ax.plot((eta_true[j], eta_rec[j]), (phi_true[j], phi_rec[j]), ls = 'dashed', color = 'grey', zorder = 1)
-    ax.scatter(eta_true, phi_true, s=EtaPhi_zscale*pt_true, color = reddish[0], label = f'True {event_number} event', zorder = 2)
-    ax.scatter(eta_rec, phi_rec, s=EtaPhi_zscale*pt_rec, color = mainblue[0], label = f'Reco {event_number} event', zorder = 2)
-    
+    scatter_true = ax.scatter(eta_true, phi_true, s=EtaPhi_zscale * pt_true, color=reddish[0], label=f'True event {event_number}', zorder=2)
+    scatter_reco = ax.scatter(eta_rec, phi_rec, s=EtaPhi_zscale * pt_rec, color=mainblue[0], label=f'Reco event {event_number}', zorder=2)
+    ax.legend(handles=[scatter_true, scatter_reco], loc='best')
+
+    # Create the second legend for pt sizes
+    legend_sizes = [125, 250, 500, 0]
+    pt_legend_handles = []
+    for size in legend_sizes:
+        handle = ax.scatter([], [], s=size * EtaPhi_zscale, fc='none', ec="black")
+        pt_legend_handles.append(handle)
+
+    # Add the markersize legend as a separate artist
+    fig.add_artist(fig.legend(handles=pt_legend_handles, labels=[f'{size}' for size in legend_sizes[:-1]]+ ['$p_{T}\, ({\mathrm{GeV}})$'], ncol=len(legend_sizes), bbox_to_anchor=(1, 1.005)))
+
     # format
     ax.set_xlim(-3, 3)
     ax.set_ylim(-np.pi, np.pi)
-    ax.set_xlabel('$\eta$')
-    ax.set_ylabel('$\phi$')
-
+    ax.set_xlabel('$\eta$', fontsize = plt.rcParams["font.size"]*0.8)
+    ax.set_ylabel('$\phi$', fontsize = plt.rcParams["font.size"]*0.8)
+    ax.tick_params(which = 'major', axis = 'both', direction=plt.rcParams["xtick.direction"], length=plt.rcParams["xtick.major.size"], labelsize=plt.rcParams["font.size"]*0.8)
+    
     # layout and plot
-    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.05, right=0.95, wspace=0.3, hspace = 0.4)
-    fig.suptitle(f'Epoch {epoch}')
+    fig.tight_layout() 
+    fig.subplots_adjust(top = 0.875, bottom=0.15, left = 0.09, right=0.92, wspace=0.3, hspace = 0.4)
     ax.legend(loc='best')
     path = f"plots/redec/{sample}/"
     mkpath(path)
@@ -441,18 +453,31 @@ def plot_PxPy_plane(jPxPyPzE, rec_jPxPyPzE, event_number = 0, **kwargs):
     E_rec = rec_jPxPyPzE[event_number, 3, :].detach().flatten().numpy()
     
     # plots
-    fig, ax = plt.subplots(1, figsize = (10, 10))
+    fig, ax = plt.subplots(1, figsize = (20, 10))
     for j in range(4):
         ax.plot((px_true[j], px_rec[j]), (py_true[j], py_rec[j]), ls = 'dashed', color = 'grey', zorder = 1)
-    ax.scatter(px_true, py_true, s=PxPy_zscale*E_true, color = reddish[0], label = f'True {event_number} event', zorder = 2)
-    ax.scatter(px_rec, py_rec, s=PxPy_zscale*E_rec, color = mainblue[0], label = f'Reco {event_number} event', zorder = 2)
+    scatter_true = ax.scatter(px_true, py_true, s=PxPy_zscale * E_true, color = reddish[0], label =f'True event {event_number}', zorder = 2)
+    scatter_reco = ax.scatter(px_rec, py_rec, s=PxPy_zscale*E_rec, color = mainblue[0], label =f'Reco event {event_number}', zorder = 2)
+    ax.legend(handles=[scatter_true, scatter_reco], loc='best')
+
+    # Create the second legend for pt sizes
+    legend_sizes = [100, 500, 1000, 0]
+    E_legend_handles = []
+    for size in legend_sizes:
+        handle = ax.scatter([], [], s=size * PxPy_zscale, fc='none', ec="black")
+        E_legend_handles.append(handle)
+
+    # Add the markersize legend as a separate artist
+    fig.add_artist(fig.legend(handles=E_legend_handles, labels=[f'{size}' for size in legend_sizes[:-1]]+ ['$E\, ({\mathrm{GeV}})$'], ncol=len(legend_sizes), bbox_to_anchor=(1, 1.005)))
 
     # format
-    ax.set_xlabel('$p_{x}\ ({\\rm GeV})$')
-    ax.set_ylabel('$p_{y}\ ({\\rm GeV})$')
+    ax.set_xlabel('$p_{x}\ ({\mathrm{GeV}})$', fontsize = plt.rcParams["font.size"]*0.8)
+    ax.set_ylabel('$p_{y}\ ({\mathrm{GeV}})$', fontsize = plt.rcParams["font.size"]*0.8)
+    ax.tick_params(which = 'major', axis = 'both', direction=plt.rcParams["xtick.direction"], length=plt.rcParams["xtick.major.size"], labelsize=plt.rcParams["font.size"]*0.8)
     
-    fig.subplots_adjust(top = 0.92, bottom=0.1, left = 0.05, right=0.95, wspace=0.3, hspace = 0.4)
-    fig.suptitle(f'Epoch {epoch}')
+    # layout and plot
+    fig.tight_layout() 
+    fig.subplots_adjust(top = 0.875, bottom=0.15, left = 0.09, right=0.92, wspace=0.3, hspace = 0.4)
     ax.legend(loc='best')
     path = f"plots/redec/{sample}/"
     mkpath(path)
@@ -611,7 +636,7 @@ def plot_PtEtaPhiE(true_val, reco_val, theta, rec_theta, logpt, rec_logpt, **kwa
 
     
     fig, ax = plt.subplots(1, 7)
-    for j, feature in enumerate(["$p_{T}\ ({\\rm GeV})$", "$\eta$", "$\phi$", "$\\theta$", "$\log{(p_{T}\ [{\\rm GeV}])}$"]):
+    for j, feature in enumerate(["$p_{T}\ ({\mathrm{GeV}})$", "$\eta$", "$\phi$", "$\\theta$", "$\log{(p_{T}\ [{\\rm GeV}])}$"]):
         if j == 3:
             width = 0.25 # GeV
             nbins = int(round(max(true_theta.flatten().numpy()) - min(true_theta.flatten().numpy())) / width) + 1 # have 20 GeV bins in each histo
@@ -703,7 +728,7 @@ def plot_training_residuals_PtEtaPhiEm2jm4j(true_val, reco_val, **kwargs): # exp
     cbar_ax = fig.add_axes([0.96, 0.1, 0.01, 0.8])
     vmax_mob = 0
     i, j = 0, 0
-    for feature in ["$p_{T}\ ({\\rm GeV})$", "$\eta$", "$\phi$", "$m_{j}\ ({\\rm GeV})$", "$m_{2j}\ ({\\rm GeV})$", "$m_{4j}\ ({\\rm GeV})$"]:
+    for feature in ["$p_{T}\ ({\mathrm{GeV}})$", "$\eta$", "$\phi$", "$m_{j}\ ({\mathrm{GeV}})$", "$m_{2j}\ ({\mathrm{GeV}})$", "$m_{4j}\ ({\mathrm{GeV}})$"]:
         if j > 3:
             i += 1
             j -= 4

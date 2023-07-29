@@ -2,16 +2,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import itertools
 
 torch.manual_seed(0)#make training results repeatable 
-
 
 def vector_print(vector, end='\n'):
     vectorString = ", ".join([f'{element:7.2f}' for element in vector])
     print(vectorString, end=end)
 
-    
+
+
 class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has what seem like typos in GBN definition. 
     def __init__(self, features, ghost_batch_size=32, number_of_ghost_batches=64, n_averaging=1, stride=1, eta=0.9, bias=True, device='cpu', name='', conv=False, conv_transpose=False, features_out=None): # number_of_ghost_batches was initially set to 64
         super(Ghost_Batch_Norm, self).__init__()
@@ -165,7 +164,8 @@ class Ghost_Batch_Norm(nn.Module): #https://arxiv.org/pdf/1705.08741v2.pdf has w
             x = x.view(batch_size, pixels, self.features).transpose(1,2).contiguous()
         return x            
 
-    
+
+
 #
 # some basic four-vector operations
 #
@@ -297,7 +297,8 @@ def deltaR_correction(dec_j) -> torch.Tensor:
     else:
         pass
     return dec_j
-                
+
+
 
 #
 # Some different non-linear units
@@ -305,14 +306,14 @@ def deltaR_correction(dec_j) -> torch.Tensor:
 def SiLU(x): #SiLU https://arxiv.org/pdf/1702.03118.pdf   Swish https://arxiv.org/pdf/1710.05941.pdf
     return x * torch.sigmoid(x)
 
-
 def NonLU(x): #Pick the default non-Linear Unit
     return SiLU(x) # often slightly better performance than standard ReLU
     #return F.relu(x)
     #return F.rrelu(x, training=training)
     #return F.leaky_relu(x, negative_slope=0.1)
     #return F.elu(x)
-    
+
+
 
 #
 # embed inputs in feature space
@@ -419,6 +420,7 @@ class Input_Embed(nn.Module):
             return j, d, q
 
 
+
 class Basic_CNN(nn.Module):
     def __init__(self, dimension, n_classes=2, device='cpu'):
         super(Basic_CNN, self).__init__()
@@ -493,8 +495,7 @@ class Basic_encoder(nn.Module):
         
     def set_mean_std(self, j):
         self.input_embed.set_mean_std(j)
-
-    
+  
     def set_ghost_batches(self, n_ghost_batches):
         self.n_ghost_batches = n_ghost_batches
         # encoder
@@ -505,7 +506,6 @@ class Basic_encoder(nn.Module):
         # bottleneck_in
         self.bottleneck_in.set_ghost_batches(n_ghost_batches)
 
-    
     def forward(self, j):
         #
         # Preparation block
@@ -588,7 +588,6 @@ class Basic_decoder(nn.Module):
         # self.decode_2 = Ghost_Batch_Norm(2*self.d, features_out=4*self.d, stride=2, conv_transpose=True, device=self.device)
         # self.decode_3 = Ghost_Batch_Norm(4*self.d, features_out=3,                  conv=True,           device=self.device)
 
-    
     def set_ghost_batches(self, n_ghost_batches):
         self.n_ghost_batches = n_ghost_batches
 
@@ -604,8 +603,7 @@ class Basic_decoder(nn.Module):
         # self.jets_res_3.set_ghost_batches(n_ghost_batches)
         # self.expand_j.set_ghost_batches(n_ghost_batches)
         self.decode_j.set_ghost_batches(n_ghost_batches)
-
-    
+  
     def forward(self, z):
         #
         # Bottleneck
@@ -684,9 +682,6 @@ class Basic_decoder(nn.Module):
         else:
             return rec_jPxPyPzE, rec_j, z
 
-
-
-
 class Basic_CNN_AE(nn.Module):
     def __init__(self, dimension, bottleneck_dim = None, permute_input_jet = False, phi_rotations = False, correct_DeltaR = False, return_masses = False, device = 'cpu'):
         super(Basic_CNN_AE, self).__init__()
@@ -707,7 +702,7 @@ class Basic_CNN_AE(nn.Module):
 
     
     def set_mean_std(self, j):
-        self.encoder.input_embed.set_mean_std(j)
+        self.encoder.set_mean_std(j)
     
     def set_ghost_batches(self, n_ghost_batches):
         self.encoder.set_ghost_batches(n_ghost_batches)
@@ -740,26 +735,24 @@ class Basic_CNN_AE(nn.Module):
 
 
 
-
-
 class K_Fold(nn.Module):
-    def __init__(self, models, task = 'FvT'):
+    def __init__(self, networks, task = 'FvT'):
         super(K_Fold, self).__init__()
-        self.models = models
-        for model in self.models:
-            model.eval()
+        self.networks = networks
+        for network in self.networks:
+            network.eval()
         self.task = task
 
     @torch.no_grad()
     def forward(self, j, e):
 
         if self.task == 'SvB' or self.task == 'FvT': # i.e. if task is classification
-            c_logits = torch.zeros(j.shape[0], self.models[0].n_classes)
+            c_logits = torch.zeros(j.shape[0], self.networks[0].n_classes)
             q_logits = torch.zeros(j.shape[0], 3)
 
-            for offset, model in enumerate(self.models):
+            for offset, network in enumerate(self.networks):
                 mask = (e==offset)
-                c_logits[mask], q_logits[mask] = model(j[mask])
+                c_logits[mask], q_logits[mask] = network(j[mask])
 
             # shift logits to have mean zero over quadjets/classes. Has no impact on output of softmax, just makes logits easier to interpret
             c_logits = c_logits - c_logits.mean(dim=-1, keepdim=True)
@@ -767,28 +760,24 @@ class K_Fold(nn.Module):
 
             return c_logits, q_logits  
         elif self.task == 'dec':
-            #rec_j = torch.zeros(j.shape[0], 4, 4) # [batch_size, 4jets, 4features]
-
-            for offset, model in enumerate(self.models):
+            rec_j = torch.zeros(j.shape[0], 4, 4)
+            z = torch.zeros(j.shape[0], self.networks[0].d_bottleneck, 1)
+            for offset, network in enumerate(self.networks):
                 mask = (e==offset)
-                if model.return_masses:
-                    jPxPyPzE, rec_jPxPyPzE, j_rot, rec_j, z, m2j, m4j, rec_m2j, rec_m4j = model(j[mask])
+                if network.return_masses:
+                    _, _, _, rec_j[mask], z[mask], _, _, _, _ = network(j[mask])
                 else:
-                    jPxPyPzE, rec_jPxPyPzE, j_rot, rec_j, z = model(j[mask])
+                    _, _, _, rec_j[mask], z[mask] = network(j[mask])
             return rec_j, z # save only j in PtEtaPhiM representation
-        elif self.task == 'sample':
-            
-            for offset, model in enumerate(self.models):
+        elif self.task == 'gen':
+            rec_j = torch.zeros(j.shape[0], 4, 4)
+            for offset, network in enumerate(self.networks):
                 mask = (e==offset)
-                if model.return_masses:
-                    jPxPyPzE, rec_jPxPyPzE, j_rot, rec_j, z, m2j, m4j, rec_m2j, rec_m4j = model(j[mask])
+                if network.return_masses:
+                    _, rec_j[mask], _, _, _ = network(j[mask])
                 else:
-                    jPxPyPzE, rec_jPxPyPzE, j_rot, rec_j, z = model(j[mask])
+                    _, rec_j[mask], _ = network(j[mask])
             return rec_j # save only j in PtEtaPhiM representation
         
         else:
             pass
-
-
-
-    
