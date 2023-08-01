@@ -1,5 +1,4 @@
 import pickle, os, argparse
-import hist
 import matplotlib
 import matplotlib.ticker as ticker
 matplotlib.use('Agg')
@@ -502,14 +501,11 @@ def plot_activations_embedded_space(z, **kwargs):
         num_rows = 2
         num_cols = 2
     elif dimension <= 6:
-        num_rows = 3
+        num_rows = 2
         num_cols = 3
-    elif dimension <= 8:
-        num_rows = 2
-        num_cols = 4
-    elif dimension <= 10:
-        num_rows = 2
-        num_cols = 5
+    elif dimension <= 9:
+        num_rows = 3
+        num_cols = 3 
     elif dimension <= 12:
         num_rows = 3
         num_cols = 4
@@ -556,19 +552,19 @@ def plot_loss(loss, **kwargs):
     # plot
     fig, ax = plt.subplots(1)
     x = np.arange(1, epoch+1)
-    ax.plot(x,loss["train"], color = "r", label = "Train loss")
-    ax.plot(x,loss["val"], color = "b", label = "Validation loss")
+    ax.plot(x,loss["train"], color = "r", label = "Train loss", lw = plt.rcParams["lines.linewidth"])
+    ax.plot(x,loss["val"], color = "b", label = "Validation loss", lw = plt.rcParams["lines.linewidth"])
 
     # format
     ax.set_yscale("log")
     ax.set_xticks(np.arange(0, len(loss["train"]) + 1, len(loss["train"]) // 20)) if len(loss["train"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]) + 1, 2))
-    ax.tick_params(which = 'minor', axis = 'both' , direction='in', length = 0)
+    ax.tick_params(which = 'minor', axis = 'x' , direction='in', length = 0)
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Loss (GeV)')
     
     # layout and save
     fig.tight_layout()
-    ax.legend(loc = "best")
+    ax.legend(loc = "best", fontsize = plt.rcParams["legend.fontsize"])
     path = f"plots/redec/{sample}/"
     mkpath(path)
     fig.savefig(f'{path}{sample}_loss_{network_name}_offset_{offset}_{epoch:03d}epochs.pdf')

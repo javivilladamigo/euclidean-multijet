@@ -408,7 +408,9 @@ class Model_AE:
                 self.lr_change.append(self.epoch)
             #if val_loss_increase_counter == 100: #or min_val_loss < 1.:
                 #break
-            
+            if self.epoch == num_epochs:
+                self.save_model()
+
         loss_tosave = {"train" : train_loss_tosave, "val" : val_loss_tosave}
         with open("loss.txt", 'w') as file:
             file.write(json.dumps(loss_tosave))
@@ -614,18 +616,20 @@ if __name__ == '__main__':
 
             import uproot
             import awkward as ak
-
+            output_datadir = 'data/'
+            activations_dir = output_datadir.replace('data/', 'activations/')
+            plots.mkpath(output_datadir)
+            plots.mkpath(activations_dir)
             picoAODs = glob('data/*picoAOD.root')
             for picoAOD in picoAODs:
-                output_file = picoAOD.replace('picoAOD', task)
+                output_file = picoAOD.replace('data/', output_datadir).replace('picoAOD', task)
                 print(f'Generate kfold output for {picoAOD} -> {output_file}')
                 coffea_files = sorted(glob(picoAOD.replace('.root','*.coffea')))
                 event = load(coffea_files)
                 j, e = coffea_to_tensor(event, decode = True, kfold=True)
                 rec_j, z = kfold(j, e) # output reconstructed jets and embedded space
 
-                activation_file = picoAOD.replace('data/', 'activations/').replace('picoAOD.root', f'z_{d}_epoch_{epoch_string}.pkl')
-                plots.mkpath("activations/")
+                activation_file = picoAOD.replace('data/', activations_dir).replace('picoAOD.root', f'z_{d}_epoch_{epoch_string}.pkl')
                 torch.save({'activations' : z}, activation_file)
                 print(f"Saved embedded space tensor to {activation_file}")
 
@@ -674,11 +678,12 @@ if __name__ == '__main__':
         import uproot
         import awkward as ak
 
-        plots.mkpath("activations/")
-        picoAODs = glob('data/*picoAOD.root')
-        for picoAOD in picoAODs:
-            activations_file = picoAOD.replace('data/', 'activations/').replace('picoAOD.root', f'z_{d}_epoch_{epoch_string}.pkl')
-            output_file = picoAOD.replace('picoAOD', task)
+        output_datadir = 'data/'
+        activations_dir = output_datadir.replace('data/', 'activations/')
+        decs = glob(f'{output_datadir}*_dec.root')
+        for dec in decs:
+            activations_file = dec.replace(output_datadir, activations_dir).replace('dec.root', f'z_{d}_epoch_{epoch_string}.pkl')
+            output_file = dec.replace('dec', task)
             print(f'Generate kfold generated output for {activations_file} -> {output_file}')
             activations = torch.load(activations_file)["activations"]
             e = torch.LongTensor(np.arange(activations.shape[0], dtype=np.uint8)) % train_valid_modulus
