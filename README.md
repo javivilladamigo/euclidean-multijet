@@ -34,5 +34,20 @@ We can precompute friend TTrees of the 3-fold model output to make it fast and e
 python python/train.py --model "models/FvT_Basic_CNN_8_offset_*_epoch_20.pkl"
 ```
 
-# Autoencorder
-Train with ``--task dec``
+# Autoencoder
+Train the autoencoder to reproduce samples in output with:
+```
+python python/train.py --train --task dec --offset 0
+python python/train.py --train --task dec --offset 1
+python python/train.py --train --task dec --offset 2
+```
+The reduced-dimension step is specified inside train.py within "Architecture hyperparameters" as ``bottleneck_dim``. Same as for the FvT and SvB classifiers, also friend TTrees can be computed of the 3-fold model:
+```
+python python/train.py --model "models/dec_fourTag_10x_Basic_CNN_6_offset_*_epoch_25.pkl"
+```
+
+## Sampling
+Running the model like before generates a file containing the activations in the bottleneck. These can be used to randomly sample a new synthetic dataset. To do it:
+```
+python python/train.py --generate --model "models/dec_fourTag_10x_Basic_CNN_AE_6_offset_*_epoch_025.pkl"
+```

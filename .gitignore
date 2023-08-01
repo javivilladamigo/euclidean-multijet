@@ -5,4 +5,4 @@
 __pycache__/
 runs/*
 plots/*
-~plots/results/
+!plots/results/
