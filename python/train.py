@@ -683,12 +683,14 @@ if __name__ == '__main__':
         decs = glob(f'{output_datadir}*_dec.root')
         for dec in decs:
             activations_file = dec.replace(output_datadir, activations_dir).replace('dec.root', f'z_{d}_epoch_{epoch_string}.pkl')
+            sample = sample #activations_file[activations_file.find("/") + 1 : activations_file.find("_")]
             output_file = dec.replace('dec', task)
-            print(f'Generate kfold generated output for {activations_file} -> {output_file}')
-            activations = torch.load(activations_file)["activations"]
-            e = torch.LongTensor(np.arange(activations.shape[0], dtype=np.uint8)) % train_valid_modulus
-            print("loaded z shape from picoAOD:", activations.shape)
-            rec_j = kfold(activations, e)
+            print(f'Generate kfold sampled output for {activations_file} -> {output_file}')
+            z = torch.load(activations_file)["activations"]
+            e = torch.LongTensor(np.arange(z.shape[0], dtype=np.uint8)) % train_valid_modulus
+            print("loaded z shape from picoAOD:", z.shape)
+            #z_sampled = GMM_sample(z, max_nb_gaussians=6, debug = True, density = True, sample = sample)
+            rec_j = kfold(z, e)
             print("extracted kfold jets shape:", rec_j.shape)
 
             # create np arrays to fill each element with the 4 quantities corresponding to the event

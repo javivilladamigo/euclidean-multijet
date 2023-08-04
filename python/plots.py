@@ -558,13 +558,14 @@ def plot_loss(loss, **kwargs):
     # format
     ax.set_yscale("log")
     ax.set_xticks(np.arange(0, len(loss["train"]) + 1, len(loss["train"]) // 20)) if len(loss["train"]) >= 20 else ax.set_xticks(np.arange(0, len(loss["train"]) + 1, 2))
+    ax.tick_params(which = 'major', axis = 'both', direction=plt.rcParams["xtick.direction"], length=plt.rcParams["xtick.major.size"], labelsize = 40)
     ax.tick_params(which = 'minor', axis = 'x' , direction='in', length = 0)
-    ax.set_xlabel('Epoch')
-    ax.set_ylabel('Loss (GeV)')
+    ax.set_xlabel('Epoch', fontsize = 40)
+    ax.set_ylabel('Loss (GeV)', fontsize = 40)
     
     # layout and save
     fig.tight_layout()
-    ax.legend(loc = "best", fontsize = plt.rcParams["legend.fontsize"])
+    ax.legend(loc = "best", fontsize = 40)
     path = f"plots/redec/{sample}/"
     mkpath(path)
     fig.savefig(f'{path}{sample}_loss_{network_name}_offset_{offset}_{epoch:03d}epochs.pdf')
