@@ -5,6 +5,7 @@ import math
 import plots
 import numpy as np
 from sklearn.mixture import GaussianMixture as GMM
+from sklearn.neighbors import KernelDensity
 from scipy.stats import norm
 
 torch.manual_seed(0)#make training results repeatable 
@@ -778,7 +779,9 @@ class K_Fold(nn.Module):
             for offset, network in enumerate(self.networks):
                 mask = (e==offset)
                 z_offset = j[mask]
-                z_sampled = GMM_sample(z_offset, max_nb_gaussians = 5, debug = True,  sample = 'fourTag_10x', density = True, offset = offset)
+                #z_sampled = GMM_sample(z_offset, max_nb_gaussians = 5, debug = True,  sample = 'fourTag_10x', density = True, offset = offset)
+                z_sampled = KDE_sample(z_offset, debug = True, sample = 'fourTag_10x', density = True, offset = offset)
+                #import sys; sys.exit()
                 if network.return_masses:
                     _, rec_j[mask], _, _, _ = network(z_sampled)
                 else:
@@ -788,110 +791,179 @@ class K_Fold(nn.Module):
         else:
             pass
 
+def KDE_sample(z, debug, **kwargs):
+    dimension = z.shape[1]
+    z = z.numpy()
+    # Flatten the data to perform KDE
+    flattened_z = z.reshape(-1, dimension)
+    if debug:
+        sample = kwargs.get('sample', 'fourTag_10x')
+        offset = kwargs.get('offset', None)
+        density = kwargs.get("density", True) # default True
+        import matplotlib.pyplot as plt
+        # create necessary things to plot
+        # Determine the grid layout based on the number of features
+        if dimension <= 4:
+            num_rows = 2
+            num_cols = 2
+        elif dimension <= 6:
+            num_rows = 2
+            num_cols = 3
+        elif dimension <= 9:
+            num_rows = 3
+            num_cols = 3 
+        elif dimension <= 12:
+            num_rows = 3
+            num_cols = 4
+        elif dimension <= 16:
+            num_rows = 4
+            num_cols = 4
+        else:
+            raise ValueError("The number of features is too high to display in a reasonable way.")
+        fig, axs = plt.subplots(num_rows, num_cols, figsize=(20,8))
+        axs = axs.flatten()
+        if (dimension < num_rows * num_cols):
+            for j in range(1, num_rows*num_cols - dimension + 1):
+                axs[-j].axis('off')  # Hide any empty subplots
+        h, bins = np.zeros_like(axs), np.zeros_like(axs)
+
+    # Create the Kernel Density Estimation model with the Gaussian kernel
+    kde = KernelDensity(kernel='gaussian', bandwidth=0.1)
+    kde.fit(flattened_z)
+
+    # Generate a new sample from the density-weighted distribution
+    num_samples = z.shape[0]  # Number of samples to generate
+    z_sampled = kde.sample(num_samples).astype(z.dtype)
+
+    # Reshape the sampled data back to the original shape
+    z_sampled = z_sampled.reshape(num_samples, dimension, 1)
+
+    if debug:
+        for d in range(dimension):
+            h[d], bins[d], _ = axs[d].hist(z[:,d], density=density, color='black', bins=32, histtype = 'step', lw = 3, ls = 'solid', label = 'True $z$')
+            axs[d].hist(z_sampled[:,d], bins = bins[d], color = "red", density = density, histtype = 'step', lw = 3, ls = 'dashed', label = "Sampled $z$")
+            axs[d].set_title(f'Feature {d+1}', fontsize = 20)
+            axs[d].set_xlabel("Value", fontsize = 20)
+            axs[d].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 20)
+            axs[d].minorticks_on()
+            axs[d].tick_params(which = 'minor', axis = 'both', direction='in', length = 3)
+            if not density:
+                axs[d].set_ylabel(f"Counts / {(bins[d][1]-bins[d][0]):.1f}", fontsize = 20)
+            else:
+                axs[d].set_ylabel(f"Counts / {(bins[d][1]-bins[d][0]):.1f} (norm)", fontsize = 20)
+            if d == 0:
+                fig.legend(loc = 'center', bbox_to_anchor=(0.25, 0.5), ncol=3, fontsize = 20)
+        fig.tight_layout()
+        path = f"plots/redec/{sample}/"
+        plots.mkpath(path)
+        path_fig = f'{path}{sample}_zsampled_{dimension}_offset_{offset}.pdf' if offset is not None else f'{path}{sample}_zsampled_{dimension}.pdf'
+        fig.savefig(path_fig)
+        print(f'KDE plot saved to {path_fig}')
+    return torch.tensor(z_sampled)
 
 def GMM_sample(z, max_nb_gaussians = 2, debug = False, **kwargs):
-            dimension = z.shape[1]
-            z = z.numpy()
-            z_sampled = np.zeros_like(z) # create the final sampled activations
-            if debug:
-                sample = kwargs.get('sample', 'fourTag_10x')
-                offset = kwargs.get('offset', None)
-                density = kwargs.get("density", True) # default True
-                import matplotlib.pyplot as plt
-                # create necessary things to plot
-                # Determine the grid layout based on the number of features
-                if dimension <= 4:
-                    num_rows = 2
-                    num_cols = 2
-                elif dimension <= 6:
-                    num_rows = 2
-                    num_cols = 3
-                elif dimension <= 9:
-                    num_rows = 3
-                    num_cols = 3 
-                elif dimension <= 12:
-                    num_rows = 3
-                    num_cols = 4
-                elif dimension <= 16:
-                    num_rows = 4
-                    num_cols = 4
-                else:
-                    raise ValueError("The number of features is too high to display in a reasonable way.")
-                fig, axs = plt.subplots(num_rows, num_cols, figsize=(20,8))
-                axs = axs.flatten()
-                if (dimension < num_rows * num_cols):
-                    for j in range(1, num_rows*num_cols - dimension + 1):
-                        axs[-j].axis('off')  # Hide any empty subplots
-                h, bins = np.zeros_like(axs), np.zeros_like(axs)
+    dimension = z.shape[1]
+    z = z.numpy()
+    z_sampled = np.zeros_like(z) # create the final sampled activations
+    if debug:
+        sample = kwargs.get('sample', 'fourTag_10x')
+        offset = kwargs.get('offset', None)
+        density = kwargs.get("density", True) # default True
+        import matplotlib.pyplot as plt
+        # create necessary things to plot
+        # Determine the grid layout based on the number of features
+        if dimension <= 4:
+            num_rows = 2
+            num_cols = 2
+        elif dimension <= 6:
+            num_rows = 2
+            num_cols = 3
+        elif dimension <= 9:
+            num_rows = 3
+            num_cols = 3 
+        elif dimension <= 12:
+            num_rows = 3
+            num_cols = 4
+        elif dimension <= 16:
+            num_rows = 4
+            num_cols = 4
+        else:
+            raise ValueError("The number of features is too high to display in a reasonable way.")
+        fig, axs = plt.subplots(num_rows, num_cols, figsize=(20,8))
+        axs = axs.flatten()
+        if (dimension < num_rows * num_cols):
+            for j in range(1, num_rows*num_cols - dimension + 1):
+                axs[-j].axis('off')  # Hide any empty subplots
+        h, bins = np.zeros_like(axs), np.zeros_like(axs)
 
-            
-            for d in range(dimension):
-                min_bic = 0
-                counter = 1
-                gmms, fits, bics = [], [], []
-                if offset is not None: print(f'\nOffset {offset}:')
-                print(f'Running GMM with max. {max_nb_gaussians} gaussians for {d}-th feature')
-                for i in range (max_nb_gaussians): # test the AIC/BIC metric between 1 and max_nb_gaussians components
-                    gmm = GMM(n_components = counter, random_state=10, covariance_type = 'full')
-                    gmms.append(gmm)
-                    fits.append(gmm.fit(z[:,d]))
-                    #labels = fit.predict(z[:,0])
-                    bic = gmm.bic(z[:,d])
-                    bics.append(bic)
-                    if bic < min_bic or min_bic == 0:
-                        min_bic = bic
-                        n_opt = counter
-                    counter = counter + 1
-                # get optimal GMM model
-                gmm_opt = gmms[n_opt - 1]
-                # get optimal parameters
-                means_opt = fits[n_opt - 1].means_
-                covs_opt  = fits[n_opt - 1].covariances_
-                weights_opt = fits[n_opt - 1].weights_
+    
+    for d in range(dimension):
+        min_bic = 0
+        counter = 1
+        gmms, fits, bics = [], [], []
+        if offset is not None: print(f'\nOffset {offset}:')
+        print(f'Running GMM with max. {max_nb_gaussians} gaussians for {d}-th feature')
+        for i in range (max_nb_gaussians): # test the AIC/BIC metric between 1 and max_nb_gaussians components
+            gmm = GMM(n_components = counter, random_state=10, covariance_type = 'full')
+            gmms.append(gmm)
+            fits.append(gmm.fit(z[:,d]))
+            #labels = fit.predict(z[:,0])
+            bic = gmm.bic(z[:,d])
+            bics.append(bic)
+            if bic < min_bic or min_bic == 0:
+                min_bic = bic
+                n_opt = counter
+            counter = counter + 1
+        # get optimal GMM model
+        gmm_opt = gmms[n_opt - 1]
+        # get optimal parameters
+        means_opt = fits[n_opt - 1].means_
+        covs_opt  = fits[n_opt - 1].covariances_
+        weights_opt = fits[n_opt - 1].weights_
 
-                if debug:
-                    h[d], bins[d], _ = axs[d].hist(z[:,d], density=density, color='black', bins=32, histtype = 'step', lw = 3, label = 'True $z$')
-                    density_factor = np.sum(h[d]*(bins[d][1:]-bins[d][:-1])) if not density else 1.
-                    x_ax = np.linspace(bins[d][0], bins[d][-1], 1000)
-                    y_axs = []
-                    for i in range(n_opt):
-                        y_axs.append(density_factor*norm.pdf(x_ax, float(means_opt[i][0]), np.sqrt(float(covs_opt[i][0][0])))*weights_opt[i]) # ith gaussian
-                        axs[d].plot(x_ax, y_axs[i], lw = 1.5)
-                        axs[d].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 20)
-                        axs[d].minorticks_on()
-                        axs[d].tick_params(which = 'minor', axis = 'both', direction='in', length = 3)
-                    axs[d].plot(x_ax, np.sum(y_axs, axis = 0), lw = 1.5, ls='dashed', label = "GMM estimated PDF")
-                    axs[d].set_title(f'Feature {d+1}; opt. comp. = {n_opt}', fontsize = 20)
-                    axs[d].set_xlabel("Value", fontsize = 20)
-                    if not density:
-                        axs[d].set_ylabel(f"Counts / {(bins[d][1]-bins[d][0]):.1f}", fontsize = 20)
-                    else:
-                        axs[d].set_ylabel(f"Counts / {(bins[d][1]-bins[d][0]):.1f} (norm)", fontsize = 20)
+        if debug:
+            h[d], bins[d], _ = axs[d].hist(z[:,d], density=density, color='black', bins=32, histtype = 'step', lw = 3, label = 'True $z$')
+            density_factor = np.sum(h[d]*(bins[d][1:]-bins[d][:-1])) if not density else 1.
+            x_ax = np.linspace(bins[d][0], bins[d][-1], 1000)
+            y_axs = []
+            for i in range(n_opt):
+                y_axs.append(density_factor*norm.pdf(x_ax, float(means_opt[i][0]), np.sqrt(float(covs_opt[i][0][0])))*weights_opt[i]) # ith gaussian
+                axs[d].plot(x_ax, y_axs[i], lw = 1.5)
+                axs[d].tick_params(which = 'major', axis = 'both', direction='out', length = 6, labelsize = 20)
+                axs[d].minorticks_on()
+                axs[d].tick_params(which = 'minor', axis = 'both', direction='in', length = 3)
+            axs[d].plot(x_ax, np.sum(y_axs, axis = 0), lw = 1.5, ls='dashed', label = "GMM estimated PDF")
+            axs[d].set_title(f'Feature {d+1}; opt. comp. = {n_opt}', fontsize = 20)
+            axs[d].set_xlabel("Value", fontsize = 20)
+            if not density:
+                axs[d].set_ylabel(f"Counts / {(bins[d][1]-bins[d][0]):.1f}", fontsize = 20)
+            else:
+                axs[d].set_ylabel(f"Counts / {(bins[d][1]-bins[d][0]):.1f} (norm)", fontsize = 20)
 
 
-                # Sampling
-                r_values = np.random.uniform(0, 1, len(z[:,d]))
-                # Cumulative sum of weights to sample the identity of the gaussian
-                weights_cum = np.cumsum(weights_opt)
-                # Find the indices of the values in weights_cumulative that are immediately higher than 'r'
-                gaussian_indices = np.searchsorted(weights_cum, r_values[:, np.newaxis], side='right')[:,0]
-                # Use list comprehension to get the parameters for the corresponding Gaussian distributions
-                mu = [float(means_opt[i][0]) for i in gaussian_indices]
-                sigma = [np.sqrt(float(covs_opt[i][0][0])) for i in gaussian_indices]
+        # Sampling
+        r_values = np.random.uniform(0, 1, len(z[:,d]))
+        # Cumulative sum of weights to sample the identity of the gaussian
+        weights_cum = np.cumsum(weights_opt)
+        # Find the indices of the values in weights_cumulative that are immediately higher than 'r'
+        gaussian_indices = np.searchsorted(weights_cum, r_values[:, np.newaxis], side='right')[:,0]
+        # Use list comprehension to get the parameters for the corresponding Gaussian distributions
+        mu = [float(means_opt[i][0]) for i in gaussian_indices]
+        sigma = [np.sqrt(float(covs_opt[i][0][0])) for i in gaussian_indices]
 
-                # Sample from the corresponding Gaussian distributions
-                z_sampled[:,d,0] = np.random.normal(mu, sigma)
-                if debug:
-                    axs[d].hist(z_sampled[:,d], bins = bins[d], color = "red", density = density, histtype = 'step', lw = 3, ls = 'solid', label = "Sampled $z$")
-                    if d == 0:
-                        fig.legend(loc='center', bbox_to_anchor=(0.25, 0.5), ncol=3, fontsize = 20)
+        # Sample from the corresponding Gaussian distributions
+        z_sampled[:,d,0] = np.random.normal(mu, sigma)
+        if debug:
+            axs[d].hist(z_sampled[:,d], bins = bins[d], color = "red", density = density, histtype = 'step', lw = 3, ls = 'solid', label = "Sampled $z$")
+            if d == 0:
+                fig.legend(loc='center', bbox_to_anchor=(0.25, 0.5), ncol=3, fontsize = 20)
 
-            # layout
-            fig.tight_layout()
-            path = f"plots/redec/{sample}/"
-            plots.mkpath(path)
-            path_fig = f'{path}{sample}_zsampled_{dimension}_offset_{offset}.pdf' if offset is not None else f'{path}{sample}_zsampled_{dimension}.pdf'
-            fig.savefig(path_fig)
-            print(f'GMM plot saved to {path_fig}')      
-            
-            return torch.tensor(z_sampled)
+    # layout
+    fig.tight_layout()
+    path = f"plots/redec/{sample}/"
+    plots.mkpath(path)
+    path_fig = f'{path}{sample}_zsampled_{dimension}_offset_{offset}.pdf' if offset is not None else f'{path}{sample}_zsampled_{dimension}.pdf'
+    fig.savefig(path_fig)
+    print(f'GMM plot saved to {path_fig}')
+    
+    return torch.tensor(z_sampled)
