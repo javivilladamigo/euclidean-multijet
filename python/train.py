@@ -93,10 +93,10 @@ permute_input_jet = False       # whether to randomly permute the positions of i
 rotate_phi = False              # whether to remove eta-phi invariances in the encoding
 correct_DeltaR = False          # whether to correct DeltaR (in inference)
 
-sample = 'fourTag_10x'
+sample = 'fourTag'
 
-testing = False
-plot_training_progress = True  # plot training progress
+testing = True
+plot_training_progress = False  # plot training progress
 if testing:
     num_epochs = 1
     plot_every = 1

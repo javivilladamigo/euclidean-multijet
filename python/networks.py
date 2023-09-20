@@ -533,20 +533,20 @@ class Basic_encoder(nn.Module):
         # Encode Block
         #
         if self.return_masses:
-            j, d, q, m2j, m4j = self.input_embed(j_rot)                                         # j.shape = [batch_size, 8, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2       
+            j, d, q, m2j, m4j = self.input_embed(j_rot)                                         # j.shape = [batch_size, self.d, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2       
         else:
-            j, d, q = self.input_embed(j_rot)                                                   # j.shape = [batch_size, 8, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2
-                                                                                                # d.shape = [batch_size, 8, 6]  -> 6 = 01 23 02 13 03 12
-                                                                                                # q.shape = [batch_size, 8, 3]  -> 3 = 0123 0213 0312; 3 pixels each with 8 features
-        d = d + NonLU(self.jets_to_dijets(j))                                                   # d.shape = [batch_size, 8, 6]
-        q = q + NonLU(self.dijets_to_quadjets(d))                                               # q.shape = [batch_size, 8, 3]
+            j, d, q = self.input_embed(j_rot)                                                   # j.shape = [batch_size, self.d, 12] -> 12 = 0 1 2 3 0 2 1 3 0 3 1 2
+                                                                                                # d.shape = [batch_size, self.d, 6]  -> 6 = 01 23 02 13 03 12
+                                                                                                # q.shape = [batch_size, self.d, 3]  -> 3 = 0123 0213 0312; 3 pixels each with 8 features
+        d = d + NonLU(self.jets_to_dijets(j))                                                   # d.shape = [batch_size, self.d, 6]
+        q = q + NonLU(self.dijets_to_quadjets(d))                                               # q.shape = [batch_size, self.d, 3]
         # compute a score for each event quadjet
         q_logits = self.select_q(q)                                                             # q_logits.shape = [batch_size, 1, 3] -> 3 = 0123 0213 0312
         # convert the score to a 'probability' with softmax. This way the classifier is learning which pairing is most relevant to the classification task at hand.
         q_score = F.softmax(q_logits, dim=-1)                                                   # q_score.shape = [batch_size, 1, 3]
         q_logits = q_logits.view(-1, 3)                                                         # q_logits.shape = [batch_size, 3, 1]
         # add together the quadjets with their corresponding probability weight
-        e_in = torch.matmul(q, q_score.transpose(1,2))                                             # e.shape = [batch_size, 8, 1] (8x3 · 3x1 = 8x1)
+        e_in = torch.matmul(q, q_score.transpose(1,2))                                          # e.shape = [batch_size, self.d, 1] (8x3 · 3x1 = 8x1)
 
 
 
@@ -575,17 +575,17 @@ class Basic_decoder(nn.Module):
 
         self.bottleneck_out         = Ghost_Batch_Norm(self.d_bottleneck, features_out=self.d, conv=True, device=self.device)
 
-        self.decode_q               = Ghost_Batch_Norm(self.d, features_out=self.d, stride=3, conv_transpose=True, device=self.device)
+        self.extract_q              = Ghost_Batch_Norm(self.d, features_out=self.d, stride=3, conv_transpose=True, device=self.device)
         self.dijets_from_quadjets   = Ghost_Batch_Norm(self.d, features_out=self.d, stride=2, conv_transpose=True, device=self.device)
         self.jets_from_dijets       = Ghost_Batch_Norm(self.d, features_out=self.d, stride=2, conv_transpose=True, device=self.device)
-        self.select_dec             = Ghost_Batch_Norm(self.d*4, features_out=1, conv=True, bias=False, device=self.device)
+        self.select_j               = Ghost_Batch_Norm(self.d*4, features_out=1, conv=True, bias=False, device=self.device)
 
-        self.jets_res_1 = Ghost_Batch_Norm(self.d, conv=True, device=self.device)
+        self.decode_j1 = Ghost_Batch_Norm(self.d, conv=True, device=self.device)
         # self.jets_res_2 = Ghost_Batch_Norm(self.d, conv=True, device=self.device)
         # self.jets_res_3 = Ghost_Batch_Norm(self.d, conv=True, device=self.device)
         # self.decode_j = Ghost_Batch_Norm(self.d, features_out=3, conv=True, device=self.device)
         
-        self.decode_j = Ghost_Batch_Norm(self.d, features_out=4, conv=True, device=self.device)
+        self.decode_j2 = Ghost_Batch_Norm(self.d, features_out=4, conv=True, device=self.device)
         # self.expand_j = Ghost_Batch_Norm(self.d, features_out=128, conv=True, device=self.device)
         # self.decode_j = Ghost_Batch_Norm(128, features_out=3, conv=True, device=self.device)# jet mass is always zero, let's take advantage of this!
 
@@ -599,15 +599,15 @@ class Basic_decoder(nn.Module):
         # bottleneck_out
         self.bottleneck_out.set_ghost_batches(n_ghost_batches)
         # decoder
-        self.decode_q.set_ghost_batches(n_ghost_batches)
+        self.extract_q.set_ghost_batches(n_ghost_batches)
         self.dijets_from_quadjets.set_ghost_batches(n_ghost_batches)
         self.jets_from_dijets.set_ghost_batches(n_ghost_batches)
-        self.select_dec.set_ghost_batches(n_ghost_batches)
-        self.jets_res_1.set_ghost_batches(n_ghost_batches)
+        self.select_j.set_ghost_batches(n_ghost_batches)
+        self.decode_j1.set_ghost_batches(n_ghost_batches)
         # self.jets_res_2.set_ghost_batches(n_ghost_batches)
         # self.jets_res_3.set_ghost_batches(n_ghost_batches)
         # self.expand_j.set_ghost_batches(n_ghost_batches)
-        self.decode_j.set_ghost_batches(n_ghost_batches)
+        self.decode_j2.set_ghost_batches(n_ghost_batches)
   
     def forward(self, z):
         #
@@ -625,15 +625,15 @@ class Basic_decoder(nn.Module):
         dec_j = NonLU(self.decode_2(dec_d)) # 2 pixel to 4
         dec_j =       self.decode_3(dec_j)  # down to four features per jet. Nonlinearity is sinh, cosh activations below
         '''
-        dec_q = NonLU(self.decode_q(e_out))                                                     # dec_q.shape = [batch_size, 8, 3] 0123 0213 0312
-        dec_d = NonLU(self.dijets_from_quadjets(dec_q))                                         # dec_d.shape = [batch_size, 8, 6] 01 23 02 13 03 12
-        dec_j = NonLU(self.jets_from_dijets(dec_d))                                             # dec_j.shape = [batch_size, 8, 12]; dec_j is interpreted as jets 0 1 2 3 0 2 1 3 0 3 1 2
+        dec_q = NonLU(self.extract_q(e_out))                                                     # dec_q.shape = [batch_size, self.d, 3] 0123 0213 0312
+        dec_d = NonLU(self.dijets_from_quadjets(dec_q))                                         # dec_d.shape = [batch_size, self.d, 6] 01 23 02 13 03 12
+        dec_j = NonLU(self.jets_from_dijets(dec_d))                                             # dec_j.shape = [batch_size, self.d, 12]; dec_j is interpreted as jets 0 1 2 3 0 2 1 3 0 3 1 2
         
         dec_j = dec_j.view(-1, self.d, 3, 4)                                                    # last index is jet
         dec_j = dec_j.transpose(-1, -2)                                                         # last index is pairing history now 
         dec_j = dec_j.contiguous().view(-1, self.d * 4, 3)                                      # 32 numbers corresponding to each pairing: which means that you have 8 numbers corresponding to each jet in each pairing concatenated along the same dimension
                                                                                                 # although this is not exact because now the information between jets is mixed, but thats the idea
-        dec_j_logits = self.select_dec(dec_j)
+        dec_j_logits = self.select_j(dec_j)
         dec_j_score = F.softmax(dec_j_logits, dim = -1)                                         # 1x3
 
         dec_j = torch.matmul(dec_j, dec_j_score.transpose(1, 2))                                # (32x3 · 3x1 = 32x1)
@@ -641,14 +641,14 @@ class Basic_decoder(nn.Module):
 
         # conv kernel 1
         j_res = dec_j.clone()
-        dec_j = NonLU(self.jets_res_1(dec_j)) + j_res
+        dec_j = NonLU(self.decode_j1(dec_j)) + j_res
         # j_res = dec_j.clone()
         # dec_j = NonLU(self.jets_res_2(dec_j))+j_res
         # j_res = dec_j.clone()
         # dec_j = NonLU(self.jets_res_3(dec_j))+j_res        
         # dec_j = self.expand_j(dec_j)
         # dec_j = NonLU(dec_j)
-        dec_j = self.decode_j(dec_j)                                                            # 4x4
+        dec_j = self.decode_j2(dec_j)                                                            # 4x4
         
 
         # apply the DeltaR correction (in inference) so that jets are separated at least deltaR = 0.4
